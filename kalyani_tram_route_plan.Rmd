@@ -110,7 +110,9 @@ table_lrt_systems <- read_html("https://en.wikipedia.org/wiki/List_of_tram_and_l
          length = str_extract(string = length, pattern = "(.*)[\\h]km", group = 1) %>% as.numeric()) %>% 
   drop_na(year) %>% 
   # rename Washington
-  mutate(city = case_when(city == "Washington" ~ "Washington DC", TRUE ~ city))
+  mutate(city = case_when(city == "Washington" ~ "Washington DC", TRUE ~ city)) %>% 
+  # Remove cities which only have heritage trams
+  filter(str_detect(string = type, pattern = "^Heritage.*", negate = TRUE))
 
 # Download world cities database from simplemaps to map ascii names to unicode names --------------------
 table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>% 
@@ -166,7 +168,8 @@ table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>%
                                 "USOL'YE-SIBIRSKOYE" ~ "USOLYE-SIBIRSKOYE",
                                 "VITSYEBSK" ~ "VITEBSK",
                                 "YEVPATORIIA" ~ "YEVPATORIA",
-                                "" ~ "İZMIT"
+                                "KOCAELI" ~ "İZMIT", 
+                                .default = city_ascii
 ))
 
 # Create table combining system and population information -----------------------
@@ -177,21 +180,33 @@ data_lrt_pop <- table_lrt_systems %>%
                    .fns = ~sum(.x, na.rm = TRUE)),
             .groups = "drop") %>% 
   mutate(across(c(city, country), toupper)) %>% 
-  # # Map popn
-  # left_join(y = table_city_pop %>% 
-  #             mutate(popn = case_when(is.na(city_pop_total) ~ urban_pop_total,
-  #                                     TRUE ~ city_pop_total),
-  #                    across(c(territory, country), toupper)) %>% 
-  #             select(territory, country, popn), 
-  #           by = c("city" = "territory", "country")) %>% 
-  # Map popn
+  # Map popn to ascii codes city
   left_join(y = table_city_name %>% select(city_ascii, country, popn),
             by = c("city" = "city_ascii", "country")) %>% 
+  # Map popn to unicode coded city
   left_join(y = table_city_name %>% select(city, country, popn),
             by = c("city" = "city", "country"), suffix = c("_1", "_2")) %>% 
-  mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1)) %>% 
-  arrange(city) %>% 
-  filter(is.na(popn))
+  # Consider overlap in population columns
+  mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1),
+         # Fill in populations for missing cities manually
+         popn = case_match(.x = city,
+                           "BAD SCHANDAU" ~ 3409,
+                          "BELGIAN COAST" ~ 219488,
+                          "CHERYOMUSHKI" ~ 10000,
+                          "DESSAU" ~ 67747,
+                          "ERFURT" ~ 216000,
+                          "HUDSON COUNTY" ~ 724854,
+                          "LUND" ~ 94393,
+                          "LUSAIL" ~ 198600,
+                          "MENGZI" ~ 585976,
+                          "OSINNIKI" ~ 40000,
+                          "QIUBEI" ~ 468172,
+                          "TIANSHUI" ~ 1212791,
+                          "VOLCHANSK" ~ 8000,
+                          "VOLZHSKY" ~ 321427,
+                          .default = popn)) %>% 
+  # Remove helper columns
+  select(-popn_1, -popn_2)
   
   
 ```
