@@ -40,40 +40,41 @@ setwd("C:\\Stuff\\Datasets\\GitHub\\kalyani_tram_route_plan\\")
 ```{r Existing Tram Networks}
 
 # Read in city populations -------------------------------------
+# Not usiong this as the names are in Unicode, which is difficult to map to ascii names in Wiki file
 # Downloaded from https://unstats.un.org/unsd/demographic-social/products/dyb/documents/DYB2024/table08.xls
-table_city_pop <- readxl::read_xlsx(path = "city_pop.xlsx", sheet = "Data", 
-                                    trim_ws = FALSE, skip = 6,
-                                    col_types = c("text", "numeric", "skip", "numeric",
-                                                  "skip", "numeric", "skip", "numeric",
-                                                  "skip", "numeric", "skip", "numeric", 
-                                                  "skip", "numeric", "skip", "numeric", 
-                                                  "skip"),
-                                    col_names = c("territory", "city_pop_total", 
-                                                  "city_pop_male", "city_pop_female",
-                                                  "city_area",
-                                                  "urban_pop_total", "urban_pop_male", 
-                                                  "urban_pop_female", "urban_area")) %>% 
-  # First, extract the year of the estimate for each country
-  mutate(estimate_year = str_extract(string = territory, pattern = "\\d{4}"),
-         # Flag rows containing cities, which are the ones having some values
-         city_flag = !(is.na(city_pop_total) & is.na(urban_pop_total)),
-         continent_flag = (toupper(territory) == territory) & (!city_flag) & (is.na(estimate_year)),
-         country_flag = (!city_flag) & (!continent_flag) & (is.na(estimate_year)),
-         # Create columns for continent and country
-         continent = case_when(continent_flag ~ territory),
-         country = case_when(country_flag ~ territory)) %>% 
-  # Fill values
-  fill(continent, country, estimate_year, .direction = "down") %>% 
-  # Keep only rows for cities
-  filter(city_flag) %>% 
-  # Remove helper columns
-  select(-contains("flag")) %>% 
-  # Clean country and continent names
-  mutate(across(.cols = c(country, continent), 
-                .fns = ~str_replace_all(string = .x, pattern = "-.*|\\d", 
-                                        replacement = "")),
-         # Remove brackets
-         territory = str_replace_all(string = territory, pattern = "\\(.*", replacement = "") %>% trimws())
+# table_city_pop <- readxl::read_xlsx(path = "city_pop.xlsx", sheet = "Data", 
+#                                     trim_ws = FALSE, skip = 6,
+#                                     col_types = c("text", "numeric", "skip", "numeric",
+#                                                   "skip", "numeric", "skip", "numeric",
+#                                                   "skip", "numeric", "skip", "numeric", 
+#                                                   "skip", "numeric", "skip", "numeric", 
+#                                                   "skip"),
+#                                     col_names = c("territory", "city_pop_total", 
+#                                                   "city_pop_male", "city_pop_female",
+#                                                   "city_area",
+#                                                   "urban_pop_total", "urban_pop_male", 
+#                                                   "urban_pop_female", "urban_area")) %>% 
+#   # First, extract the year of the estimate for each country
+#   mutate(estimate_year = str_extract(string = territory, pattern = "\\d{4}"),
+#          # Flag rows containing cities, which are the ones having some values
+#          city_flag = !(is.na(city_pop_total) & is.na(urban_pop_total)),
+#          continent_flag = (toupper(territory) == territory) & (!city_flag) & (is.na(estimate_year)),
+#          country_flag = (!city_flag) & (!continent_flag) & (is.na(estimate_year)),
+#          # Create columns for continent and country
+#          continent = case_when(continent_flag ~ territory),
+#          country = case_when(country_flag ~ territory)) %>% 
+#   # Fill values
+#   fill(continent, country, estimate_year, .direction = "down") %>% 
+#   # Keep only rows for cities
+#   filter(city_flag) %>% 
+#   # Remove helper columns
+#   select(-contains("flag")) %>% 
+#   # Clean country and continent names
+#   mutate(across(.cols = c(country, continent), 
+#                 .fns = ~str_replace_all(string = .x, pattern = "-.*|\\d", 
+#                                         replacement = "")),
+#          # Remove brackets
+#          territory = str_replace_all(string = territory, pattern = "\\(.*", replacement = "") %>% trimws())
 
 # Fetch list of tram and metro systems ---------------------------
 table_lrt_systems <- read_html("https://en.wikipedia.org/wiki/List_of_tram_and_light_rail_transit_systems") %>% 
@@ -101,14 +102,73 @@ table_lrt_systems <- read_html("https://en.wikipedia.org/wiki/List_of_tram_and_l
          type = Type, ridership = `Annual ridership(millions)`) %>% 
   # Process fields
   mutate(across(.cols = everything(), 
-                .fns = ~str_replace_all(string = .x, pattern = "\\[.*", 
+                .fns = ~str_replace_all(string = .x, pattern = "\\[.*|,.*", 
                                         replacement = "")),
          # Convert to numeric
          across(.cols = c(year, stations, lines), 
                 .fns = ~str_extract(string = .x, pattern = "\\d.*") %>% as.integer()),
          length = str_extract(string = length, pattern = "(.*)[\\h]km", group = 1) %>% as.numeric()) %>% 
-  drop_na(year)
-  
+  drop_na(year) %>% 
+  # rename Washington
+  mutate(city = case_when(city == "Washington" ~ "Washington DC", TRUE ~ city))
+
+# Download world cities database from simplemaps to map ascii names to unicode names --------------------
+table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>% 
+  # Recode country names that do not match Popn table
+  mutate(country = case_match(.x = country, "Korea, North" ~ "North Korea",
+                              "Czechia" ~ "Czech Republic",
+                              .default = country),
+         city_ascii = case_when(city_ascii == "Washington" & admin_name == "District of Columbia" ~ "Washington DC",
+                                TRUE ~ city_ascii),
+         city = case_when(city == "Washington" & admin_name == "District of Columbia" ~ "Washington DC",
+                                TRUE ~ city),
+         popn = population,
+         across(c(city, city_ascii, country), toupper)) %>% 
+  # Some city names are duplicated, keep only the entry per city-country with highest popn
+  group_by(city_ascii, country) %>% 
+  slice_max(order_by = population, n = 1) %>% ungroup() %>% 
+  # Recode city names
+  mutate(city_ascii = case_match(.x = city_ascii,
+                                 "AR RAYYAN" ~ "AL RAYYAN",
+                                "BRANDENBURG" ~ "BRANDENBURG AN DER HAVEL",
+                                "CH'ONGJIN" ~ "CHONGJIN",
+                                "ERFURT" ~ "ERFURT",
+                                "FRANKFURT" ~ "FRANKFURT AM MAIN",
+                                "GALATI" ~ "GALAȚI",
+                                "GENT" ~ "GHENT",
+                                "COPENHAGEN" ~ "GREATER COPENHAGEN",
+                                "HANNOVER" ~ "HANOVER",
+                                "IASI" ~ "IAȘI",
+                                "JINAN" ~ "JINAN ",
+                                "KAMAKURAYAMA" ~ "KAMAKURA",
+                                "KATOWICE" ~ "KATOWICE AND ITS AREA",
+                                "KRASNOTUR'INSK" ~ "KRASNOTURYINSK",
+                                "LUZHANG" ~ "LIJIANG",
+                                "MINNEAPOLIS" ~ "MINNEAPOLIS–SAINT PAUL",
+                                "NABEREZHNYYE CHELNY" ~ "NABEREZHNYE CHELNY",
+                                "TAIPEI" ~ "NEW TAIPEI",
+                                "NEWCASTLE" ~ "NEWCASTLE UPON TYNE",
+                                "NIZHNIY NOVGOROD" ~ "NIZHNY NOVGOROD",
+                                "NIZHNIY TAGIL" ~ "NIZHNY TAGIL",
+                                "NAVAPOLATSK" ~ "NOVOPOLOTSK",
+                                "OREL" ~ "ORYOL",
+                                "PADOVA" ~ "PADUA",
+                                "PLOIESTI" ~ "PLOIEȘTI",
+                                "PORT LOUIS" ~ "PORT LOUIS AND THE DISTRICT OF PLAINES WILHEMS",
+                                "RESITA" ~ "REȘIȚA",
+                                "ROSTOV" ~ "ROSTOV-ON-DON",
+                                "SANTA CRUZ" ~ "SANTA CRUZ DE TENERIFE",
+                                "SANTOS" ~ "SANTOS AND THE METROPOLITAN REGION OF BAIXADA SANTISTA",
+                                "SEVILLA" ~ "SEVILLE",
+                                "STARYY OSKOL" ~ "STARY OSKOL",
+                                "TEL AVIV-YAFO" ~ "TEL AVIV",
+                                "TIMISOARA" ~ "TIMIȘOARA",
+                                "USOL'YE-SIBIRSKOYE" ~ "USOLYE-SIBIRSKOYE",
+                                "VITSYEBSK" ~ "VITEBSK",
+                                "YEVPATORIIA" ~ "YEVPATORIA",
+                                "" ~ "İZMIT"
+))
+
 # Create table combining system and population information -----------------------
 data_lrt_pop <- table_lrt_systems %>% 
   # Some cities have multiple rows, sum up the values for them
@@ -117,14 +177,21 @@ data_lrt_pop <- table_lrt_systems %>%
                    .fns = ~sum(.x, na.rm = TRUE)),
             .groups = "drop") %>% 
   mutate(across(c(city, country), toupper)) %>% 
+  # # Map popn
+  # left_join(y = table_city_pop %>% 
+  #             mutate(popn = case_when(is.na(city_pop_total) ~ urban_pop_total,
+  #                                     TRUE ~ city_pop_total),
+  #                    across(c(territory, country), toupper)) %>% 
+  #             select(territory, country, popn), 
+  #           by = c("city" = "territory", "country")) %>% 
   # Map popn
-  left_join(y = table_city_pop %>% 
-              mutate(popn = case_when(is.na(city_pop_total) ~ urban_pop_total,
-                                      TRUE ~ city_pop_total),
-                     across(c(territory, country), toupper)) %>% 
-              select(territory, country, popn), 
-            by = c("city" = "territory", "country")) %>% 
-  group_by(city) %>% mutate(n = n())
+  left_join(y = table_city_name %>% select(city_ascii, country, popn),
+            by = c("city" = "city_ascii", "country")) %>% 
+  left_join(y = table_city_name %>% select(city, country, popn),
+            by = c("city" = "city", "country"), suffix = c("_1", "_2")) %>% 
+  mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1)) %>% 
+  arrange(city) %>% 
+  filter(is.na(popn))
   
   
 ```
