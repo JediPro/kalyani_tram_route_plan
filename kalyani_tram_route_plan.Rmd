@@ -206,150 +206,40 @@ data_lrt_pop <- table_lrt_systems %>%
                           "VOLZHSKY" ~ 321427,
                           .default = popn)) %>% 
   # Remove helper columns
-  select(-popn_1, -popn_2)
-  
-  
+  select(-popn_1, -popn_2) %>% 
+  # Replace 0 in stations and lines with NA
+  mutate(across(.cols = c(stations, lines), ~na_if(x = .x, y = 0)))
 ```
 
-## Schedule for 2026
+## Visualize relations between route characteristics and city population
 
-```{r 2026}
-# Extract event text from page -----------------
-table_events <- read_html(x = "https://kolkatalitmeet.in/2026/") %>% 
-  # Individual elements
-  html_elements(css = "div.relative.section-div") %>% 
-  # Extract text, cleaning up a bit
-  html_text2() %>% 
-  # Convert to tibble
-  as_tibble_col(column_name = "event_raw")
-
-# Write to disk ----------------------------
-arrow::write_parquet(x = table_events, sink = "table_events_2026.parquet")
-
-# Read from disk -------------------------
-table_events <- arrow::read_parquet(file = "table_events_2026.parquet")
-
-# Colours fetched from logo and shaded -------------------
-# Primary
-colorspace::lighten(col = "#EB2228", amount = 0.3, space = "HCL", method = "absolute") #FFB5B6
-# Secondary
-colorspace::lighten(col = "#1150A0", amount = 0.4, space = "HCL", method = "absolute") #7B9CE9
-
-# Process ---------------------------------
-data_events <- table_events %>% 
-  # Separate into separate columns
-  separate_wider_delim(cols = event_raw, delim = regex("(\\n{1,2})"), 
-                       names = c("date", "time", "venue", "title", "blurb", "panel"),
-                       too_few = "align_start", too_many = "merge") %>% 
-  # Trim all whitespace
-  mutate(across(.cols = everything(), .fns = ~trimws(x = ., which = "both"))) %>% 
-  # Extract panel names
-  mutate(panel = str_replace_all(string = panel, pattern = "(\\n{1,2})", replacement = " | ")) %>% 
-  # Convert time stamp
-  unite(col = start_time, date, time, sep = " ", remove = TRUE) %>% 
-  mutate(start_time = parse_date_time(x = start_time, orders = c("%A | %B %d, %Y %I:%M %p", "%A | %d %B, %Y %I:%M %p")),
-         date = date(start_time),
-         # truncate venue names
-         venue = str_replace_all(string = venue, pattern = " \\(.*", replacement = ""),
-         # Standardize spelling
-         venue = str_replace_all(string = venue, pattern = "Ka[lL]am", replacement = "KaLaM")) %>% 
-  # Sort in chronological order
-  arrange(start_time) %>% 
-  # Calculate end time
-  group_by(date, venue) %>% 
-  mutate(end_time = lead(start_time)) %>% 
-  relocate(date, .before = start_time) %>% 
-  relocate(end_time, .after = start_time) %>% 
-  # Fill in blanks, assuming 50m duration
-  mutate(end_time = case_when(is.na(end_time) ~ start_time + minutes(50),
-                              # If end time is more than 50m, truncate to 50
-                              interval(start = start_time, 
-                                       end = end_time)/minutes(1) > 50 ~ start_time + minutes(50),
-                              TRUE ~ end_time),
-         # Index venues in order to assign order and colours
-         venue_label = case_match(.x = venue,
-                                  "KaLaM Lawns" ~ 2,
-                                  "KaLaM Hub" ~ 1,
-                                  .default = 0),
-         # Set date to same date for every time object
-         across(.cols = c(start_time, end_time), 
-                .fns = function(x){update(object = x, year = 2026, month = 1, mday = 15)}),
-         # Session index at venue
-         session_even = row_number() %% 2,
-         # Set fill colour
-         fill = case_when(venue_label == 2 & session_even == 0 ~ "#FFB5B6",
-                          venue_label == 2 & session_even == 1 ~ "#EB2228",
-                          venue_label == 1 & session_even == 0 ~ "#9BB7FF",
-                          venue_label == 1 & session_even == 1 ~ "#1150A0",
-                          venue_label == 0 & session_even == 0 ~ "#E6F5D0",
-                          venue_label == 0 & session_even == 1 ~ "#B8E186"),
-         text_colour = case_when(venue_label >= 1 & session_even == 0 ~ "black",
-                                 venue_label >= 1 & session_even == 1 ~ "white",
-                                 venue_label == 0 ~ "black")) %>% 
-  ungroup() %>% 
-  # Remove all venues except the 2 primary ones
-  filter(venue_label > 0) %>% 
-  # Truncate titles
-  mutate(title = str_trunc(string = title, width = 50, side = "right"),
-         panel = str_trunc(string = panel, width = 70, side = "right"))
-
-# Fetch logo from webpage ------------------------------------------
-data_image <- tibble(date = min(data_events$date), img = "https://kolkatalitmeet.in/2026/wp-content/themes/klm/assets/logo/klm.png")
-
-# Visualize -----------------------------------------
-plot_schedule <- data_events %>% 
+```{r Routes vs Population}
+# Plot Length vs Stations --------------------------------
+plot_length_stations <- data_lrt_pop %>% 
+  # plot
   ggplot() +
-  # Date
-  # geom_text_npc(data = . %>% group_by(date) %>% slice_head(n = 1),
-  #               mapping = aes(npcx = 0.01, npcy = 0.5, 
-  #                             label = format(x = date, format = "%d")),
-  #               family = "Titillium Web", colour = "grey7", alpha = 0.3,
-  #               hjust = 0.5, vjust = 0.5, fontface = "bold", size = 30) +
-  # Rect for date
-  geom_fit_text(data = . %>% group_by(date) %>% slice_head(n = 1),
-                mapping = aes(xmin = start_time - minutes(20), ymin = 0.5, 
-                              xmax = start_time, ymax = 2.5, 
-                              label = format(x = date, format = "%d")), 
-                family = "Titillium Web", colour = "grey7", alpha = 0.3,
-                hjust = 0.5, vjust = 0.5, fontface = "bold", size = 30) +
-  # Rects
-  geom_rect(mapping = aes(xmin = start_time, ymin = venue_label - 0.5,
-                          xmax = end_time, ymax = venue_label + 0.5,
-                       fill = fill), 
-            colour = "white", linewidth = 1) +
-  # Labels
-  geom_fit_text(mapping = aes(xmin = start_time, ymin = venue_label,
-                              xmax = end_time, ymax = venue_label + 0.5,
-                       label = title, colour = text_colour), size = 15, 
-                family = "Titillium Web", fontface = "bold", min.size = 8, 
-                place = "topleft", fullheight = TRUE, reflow = TRUE) +
-  # Labels for panel
-  geom_fit_text(mapping = aes(xmin = start_time, ymin = venue_label - 0.5,
-                       xmax = end_time, ymax = venue_label,
-                       label = panel, colour = text_colour), size = 12,
-                family = "Titillium Web", fontface = "bold", min.size = 7, 
-                place = "bottomright", fullheight = TRUE, reflow = TRUE) +
-  # Show image
-  ggimage::geom_image(data = data_image, 
-                      mapping = aes(x = as_datetime(paste(min(date(data_events$start_time)), "16:55:00 UTC")), 
-                                    y = 1.3, image = img),
-                      by = "height", size = 0.8, hjust = 0) +
+  # points
+  geom_point(mapping = aes(x = length, y = stations), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = length, y = stations), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
   # Scales
-  scale_x_datetime(name = NULL, expand = expansion(mult = c(0.02, 0.02)),
-                     labels = time_format(format = "%l %p"), breaks = "2 hours") +
-  scale_y_continuous(name = NULL, breaks = NULL,
-                     expand = expansion(mult = c(0.02, 0.02))) +
-  scale_colour_identity(guide = NULL) +
-  scale_fill_identity(guide = NULL) +
-  # Facets
-  facet_wrap(facets = vars(date), ncol = 1) +
+  scale_x_continuous(name = "Route Length", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Stations", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
   # Labels
-  labs() +
-  theme_vaw_light() +
-  theme(panel.grid.major.y = element_blank(),
-        panel.border = element_rect(fill = NA, colour = "grey29", linewidth = 1),
-        strip.text.x = element_blank())
+  labs(title = "Stations vs Route Length") +
+  theme_vaw_dark()
 
-ggsave(filename = "KLM_Schedule_2026.png", plot = plot_schedule, device = "png", 
-       width = 70, height = 35, units = "cm", dpi = 300, limitsize = FALSE)
+# Model Length vs Stations ----------------------
+mod_length_stations <- lm(formula = log10(stations) ~ log10(length), 
+                          data = data_lrt_pop, na.action = na.omit)
+yardstick::rsq_trad_vec(truth = mod_length_stations$model$`log10(stations)`, 
+                        estimate = mod_length_stations$fitted.values)
+
+
+
 ```
+
