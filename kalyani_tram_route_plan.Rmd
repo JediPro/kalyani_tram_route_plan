@@ -110,9 +110,50 @@ table_lrt_systems <- read_html("https://en.wikipedia.org/wiki/List_of_tram_and_l
          length = str_extract(string = length, pattern = "(.*)[\\h]km", group = 1) %>% as.numeric()) %>% 
   drop_na(year) %>% 
   # rename Washington
-  mutate(city = case_when(city == "Washington" ~ "Washington DC", TRUE ~ city)) %>% 
+  mutate(city = case_when(city == "Washington" ~ "Washington DC", TRUE ~ city),
+         city = trimws(city)) %>% 
   # Remove cities which only have heritage trams
   filter(str_detect(string = type, pattern = "^Heritage.*", negate = TRUE))
+
+# Fetch list of cities with metro systems ----------------------------------------
+table_metro_systems <- read_html("https://en.wikipedia.org/wiki/List_of_metro_systems") %>% 
+  # Reqad in all tables in the file
+  html_table(header = TRUE) %>% 
+  # convert to tibble for easier wrangling
+  as_tibble_col(column_name = "tbl") %>% 
+  # Extract number of columns in each table
+  mutate(num_col = map_int(.x = tbl, .f = ncol)) %>% 
+  # Keep only tables with at least 8 columns, as they correspond to data we need
+  filter(num_col >= 8) %>% 
+  # Unnest all
+  select(-num_col) %>% 
+  # Convert to character all columns in the files
+  mutate(tbl = map(.x = tbl, .f = as_tibble),
+         # Rename a column in one of the files
+         tbl = map(.x = tbl, .f = function(x){ x %>% 
+             rename(Stations = c(contains("Stations")))})) %>% 
+  unnest(cols = tbl) %>% 
+  # Rename columns
+  rename(city = City, country = Country, system = Name, year_open = `Serviceopened`,
+         last_expansion = `Lastexpanded`, stations = Stations, 
+         length = `System length`, ridership = `Annual ridership(millions)`) %>% 
+  # Process fields
+  mutate(across(.cols = everything(), 
+                .fns = ~str_replace_all(string = .x, pattern = "\\[.*|,.*", 
+                                        replacement = "")),
+         # Convert to numeric
+         across(.cols = c(year_open, last_expansion, stations), 
+                .fns = ~str_extract(string = .x, pattern = "\\d.*") %>% as.integer()),
+         length = str_extract(string = length, pattern = "(.*)[\\h]km", group = 1) %>% as.numeric(),
+         # Recode city
+         city = case_match(.x = city, 
+                           "Washington" ~ "Washington DC",
+                           "San Francisco (Bay Area)" ~ "San Francisco",
+                           "Taipei" ~ "New Taipei",
+                           "Copenhagen" ~ "Greater Copenhagen",
+                           .default = city),
+         # Convert to upper
+         across(c(city, country), toupper))
 
 # Download world cities database from simplemaps to map ascii names to unicode names --------------------
 table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>% 
@@ -141,7 +182,6 @@ table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>%
                                 "COPENHAGEN" ~ "GREATER COPENHAGEN",
                                 "HANNOVER" ~ "HANOVER",
                                 "IASI" ~ "IAȘI",
-                                "JINAN" ~ "JINAN ",
                                 "KAMAKURAYAMA" ~ "KAMAKURA",
                                 "KATOWICE" ~ "KATOWICE AND ITS AREA",
                                 "KRASNOTUR'INSK" ~ "KRASNOTURYINSK",
@@ -185,7 +225,11 @@ data_lrt_pop <- table_lrt_systems %>%
             by = c("city" = "city_ascii", "country")) %>% 
   # Map popn to unicode coded city
   left_join(y = table_city_name %>% select(city, country, popn),
-            by = c("city" = "city", "country"), suffix = c("_1", "_2")) %>% 
+            by = c("city", "country"), suffix = c("_1", "_2")) %>% 
+  # Get length of metro systems for cities which have them
+  left_join(y = table_metro_systems %>% group_by(city, country) %>% 
+              summarise(length = sum(length), .groups = "drop"),
+            by = c("city", "country"), suffix = c("", "_metro")) %>% 
   # Consider overlap in population columns
   mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1),
          # Fill in populations for missing cities manually
@@ -208,13 +252,14 @@ data_lrt_pop <- table_lrt_systems %>%
   # Remove helper columns
   select(-popn_1, -popn_2) %>% 
   # Replace 0 in stations and lines with NA
-  mutate(across(.cols = c(stations, lines), ~na_if(x = .x, y = 0)))
+  mutate(across(.cols = c(stations, lines), ~na_if(x = .x, y = 0))) 
 ```
 
 ## Visualize relations between route characteristics and city population
 
 ```{r Routes vs Population}
-# Plot Length vs Stations --------------------------------
+# Length vs Stations --------------------------------
+# Plot
 plot_length_stations <- data_lrt_pop %>% 
   # plot
   ggplot() +
@@ -225,7 +270,7 @@ plot_length_stations <- data_lrt_pop %>%
               colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
               method = "lm") +
   # Scales
-  scale_x_continuous(name = "Route Length", 
+  scale_x_continuous(name = "Route Length (km)", 
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
   scale_y_continuous(name = "Stations", 
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
@@ -233,13 +278,165 @@ plot_length_stations <- data_lrt_pop %>%
   labs(title = "Stations vs Route Length") +
   theme_vaw_dark()
 
-# Model Length vs Stations ----------------------
+# Model Length vs Stations
 mod_length_stations <- lm(formula = log10(stations) ~ log10(length), 
                           data = data_lrt_pop, na.action = na.omit)
+# R-squared
 yardstick::rsq_trad_vec(truth = mod_length_stations$model$`log10(stations)`, 
                         estimate = mod_length_stations$fitted.values)
+# Prediction
+10^(mod_length_stations$coefficients[1] + (mod_length_stations$coefficients[2] * log10(1)))
+
+# Length vs Lines --------------------------------
+# Plot
+plot_length_lines <- data_lrt_pop %>% 
+  # plot
+  ggplot() +
+  # points
+  geom_point(mapping = aes(x = length, y = lines), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = length, y = lines), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
+  # Scales
+  scale_x_continuous(name = "Route Length (km)", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Lines", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  # Labels
+  labs(title = "Lines vs Route Length") +
+  theme_vaw_dark()
+
+# Model Length vs Stations
+mod_length_lines <- lm(formula = log10(lines) ~ log10(length), 
+                          data = data_lrt_pop, na.action = na.omit)
+# R-squared
+yardstick::rsq_trad_vec(truth = mod_length_lines$model$`log10(lines)`, 
+                        estimate = mod_length_lines$fitted.values)
+# Prediction
+10^(mod_length_lines$coefficients[1] + (mod_length_lines$coefficients[2] * log10(30)))
+
+# Stations vs Lines --------------------------------
+# Plot
+plot_lines_stations <- data_lrt_pop %>% 
+  # plot
+  ggplot() +
+  # points
+  geom_point(mapping = aes(x = lines, y = stations), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = lines, y = stations), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
+  # Scales
+  scale_x_continuous(name = "Lines", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Stations", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  # Labels
+  labs(title = "Stations vs Lines") +
+  theme_vaw_dark()
+
+# Model Length vs Stations
+mod_lines_stations <- lm(formula = log10(stations) ~ log10(lines), 
+                          data = data_lrt_pop, na.action = na.omit)
+# R-squared
+yardstick::rsq_trad_vec(truth = mod_lines_stations$model$`log10(stations)`, 
+                        estimate = mod_lines_stations$fitted.values)
+# Prediction
+10^(mod_lines_stations$coefficients[1] + (mod_lines_stations$coefficients[2] * log10(10)))
+
+# Population vs Length -------------------------------
+# Plot
+plot_popn_length <- data_lrt_pop %>% 
+  filter(is.na(length_metro) & popn >= 2e+4) %>% 
+  # plot
+  ggplot() +
+  # points
+  geom_point(mapping = aes(x = popn, y = length), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = popn, y = length), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
+  # Scales
+  scale_x_continuous(name = "Population", 
+                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Route Length (km)", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  # Labels
+  labs(title = "Route Length vs Population") +
+  theme_vaw_dark()
+
+# Model Length vs Stations
+mod_popn_length <- lm(formula = log10(length) ~ log10(popn), 
+                          data = data_lrt_pop %>%
+                        filter(is.na(length_metro) & popn >= 2e+4), na.action = na.omit)
+# R-squared
+yardstick::rsq_trad_vec(truth = mod_popn_length$model$`log10(length)`, 
+                        estimate = mod_popn_length$fitted.values)
+# Prediction
+10^(mod_popn_length$coefficients[1] + (mod_popn_length$coefficients[2] * log10(1e+5)))
 
 
+# Population vs Stations -------------------------------
+# Plot
+plot_popn_stations <- data_lrt_pop %>% 
+  # plot
+  ggplot() +
+  # points
+  geom_point(mapping = aes(x = popn, y = stations), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = popn, y = stations), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
+  # Scales
+  scale_x_continuous(name = "Population", 
+                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Stations", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  # Labels
+  labs(title = "Stations vs Population") +
+  theme_vaw_dark()
 
+# Model stations vs Stations
+mod_popn_stations <- lm(formula = log10(stations) ~ log10(popn), 
+                          data = data_lrt_pop, na.action = na.omit)
+# R-squared
+yardstick::rsq_trad_vec(truth = mod_popn_stations$model$`log10(stations)`, 
+                        estimate = mod_popn_stations$fitted.values)
+# Prediction
+10^(mod_popn_stations$coefficients[1] + (mod_popn_stations$coefficients[2] * log10(1e+5)))
+
+# Population vs Lines -------------------------------
+# Plot
+plot_popn_lines <- data_lrt_pop %>% 
+  # plot
+  ggplot() +
+  # points
+  geom_point(mapping = aes(x = popn, y = lines), size = 2, 
+             alpha = 0.8, colour = "firebrick") +
+  geom_smooth(mapping = aes(x = popn, y = lines), linewidth = 1,
+              colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
+              method = "lm") +
+  # Scales
+  scale_x_continuous(name = "Population", 
+                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  scale_y_continuous(name = "Lines", 
+                     expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
+  # Labels
+  labs(title = "Lines vs Population") +
+  theme_vaw_dark()
+
+# Model lines vs lines
+mod_popn_lines <- lm(formula = log10(lines) ~ log10(popn), 
+                          data = data_lrt_pop, na.action = na.omit)
+# R-squared
+yardstick::rsq_trad_vec(truth = mod_popn_lines$model$`log10(lines)`, 
+                        estimate = mod_popn_lines$fitted.values)
+# Prediction
+10^(mod_popn_lines$coefficients[1] + (mod_popn_lines$coefficients[2] * log10(1e+5)))
 ```
+
 
