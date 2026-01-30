@@ -455,11 +455,7 @@ xmin <- 88.421
 bbox <- c(xmin = xmin, ymin = ymin,
           xmax = xmax, ymax = ymax)
 
-# Creat polygon from bounding box --------------------------
-# Create bounding box polygon ----------------
-bbox_polygon <- st_bbox(obj = bbox, crs = st_crs(feat_major_road$osm_lines)) %>% 
-  # Convert to sf
-  st_as_sfc()
+# Create polygon from bounding box --------------------------
 
 # # Get main roads
 # feat_major_road <- opq(bbox = bbox, timeout = 100) %>%
@@ -475,6 +471,11 @@ bbox_polygon <- st_bbox(obj = bbox, crs = st_crs(feat_major_road$osm_lines)) %>%
 # write_rds(x = feat_major_road, file = "kalyani_road.rds")
 feat_major_road <- read_rds(file = "kalyani_road.rds")
 
+# Create bounding box polygon ----------------
+bbox_polygon <- st_bbox(obj = bbox, crs = st_crs(feat_major_road$osm_lines)) %>% 
+  # Convert to sf
+  st_as_sfc()
+
 # Create sf object combining lines and polygons ----------------------------
 sf_city_road <- bind_rows(feat_major_road$osm_lines %>% 
                             select(osm_id, highway),
@@ -484,6 +485,16 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   # Truncate roads to stay within bounding box
   st_intersection(y = bbox_polygon)
 
-ggplot(sf_city_road) + geom_sf()
+# Load Population raster ------------------------------
+rs_popn <- terra::rast(x = "GHS_POP_E2030_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif")
+rs_popn <- rs_popn %>% 
+  terra::crop(y = terra::vect(x = bbox_polygon %>% 
+                                st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
+  # Transform projection
+  terra::project(y = "epsg:4326")
+
+ggplot() + tidyterra::geom_spatraster(data = rs_popn, 
+                                      mapping = aes(fill = GHS_POP_E2030_GLOBE_R2023A_54009_100_V1_0_R7_C27)) +
+  geom_sf(data = sf_city_road, mapping = aes(geometry = geometry))
 ```
 
