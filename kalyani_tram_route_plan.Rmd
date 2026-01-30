@@ -27,6 +27,7 @@ library(ggalt)
 library(patchwork)
 library(ggfittext)
 library(rvest)
+library(osmdata)
 
 # Load themes script
 source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
@@ -223,13 +224,12 @@ data_lrt_pop <- table_lrt_systems %>%
   # Map popn to ascii codes city
   left_join(y = table_city_name %>% select(city_ascii, country, popn),
             by = c("city" = "city_ascii", "country")) %>% 
-  # Map popn to unicode coded city
+  # Remove cities which also have metro systems, to get closer estimates
   left_join(y = table_city_name %>% select(city, country, popn),
             by = c("city", "country"), suffix = c("_1", "_2")) %>% 
   # Get length of metro systems for cities which have them
-  left_join(y = table_metro_systems %>% group_by(city, country) %>% 
-              summarise(length = sum(length), .groups = "drop"),
-            by = c("city", "country"), suffix = c("", "_metro")) %>% 
+  anti_join(y = table_metro_systems %>% distinct(city, country),
+            by = c("city", "country")) %>% 
   # Consider overlap in population columns
   mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1),
          # Fill in populations for missing cities manually
@@ -277,7 +277,8 @@ plot_length_stations <- data_lrt_pop %>%
   # Labels
   labs(title = "Stations vs Route Length") +
   theme_vaw_dark()
-
+# Show plot
+plot_length_stations
 # Model Length vs Stations
 mod_length_stations <- lm(formula = log10(stations) ~ log10(length), 
                           data = data_lrt_pop, na.action = na.omit)
@@ -306,7 +307,8 @@ plot_length_lines <- data_lrt_pop %>%
   # Labels
   labs(title = "Lines vs Route Length") +
   theme_vaw_dark()
-
+# Show plot
+plot_length_lines
 # Model Length vs Stations
 mod_length_lines <- lm(formula = log10(lines) ~ log10(length), 
                           data = data_lrt_pop, na.action = na.omit)
@@ -314,7 +316,7 @@ mod_length_lines <- lm(formula = log10(lines) ~ log10(length),
 yardstick::rsq_trad_vec(truth = mod_length_lines$model$`log10(lines)`, 
                         estimate = mod_length_lines$fitted.values)
 # Prediction
-10^(mod_length_lines$coefficients[1] + (mod_length_lines$coefficients[2] * log10(30)))
+10^(mod_length_lines$coefficients[1] + (mod_length_lines$coefficients[2] * log10(7)))
 
 # Stations vs Lines --------------------------------
 # Plot
@@ -335,7 +337,8 @@ plot_lines_stations <- data_lrt_pop %>%
   # Labels
   labs(title = "Stations vs Lines") +
   theme_vaw_dark()
-
+# Show plot
+plot_lines_stations
 # Model Length vs Stations
 mod_lines_stations <- lm(formula = log10(stations) ~ log10(lines), 
                           data = data_lrt_pop, na.action = na.omit)
@@ -343,12 +346,11 @@ mod_lines_stations <- lm(formula = log10(stations) ~ log10(lines),
 yardstick::rsq_trad_vec(truth = mod_lines_stations$model$`log10(stations)`, 
                         estimate = mod_lines_stations$fitted.values)
 # Prediction
-10^(mod_lines_stations$coefficients[1] + (mod_lines_stations$coefficients[2] * log10(10)))
+10^(mod_lines_stations$coefficients[1] + (mod_lines_stations$coefficients[2] * log10(1)))
 
 # Population vs Length -------------------------------
 # Plot
 plot_popn_length <- data_lrt_pop %>% 
-  filter(is.na(length_metro) & popn >= 2e+4) %>% 
   # plot
   ggplot() +
   # points
@@ -366,11 +368,11 @@ plot_popn_length <- data_lrt_pop %>%
   # Labels
   labs(title = "Route Length vs Population") +
   theme_vaw_dark()
-
+# Show plot
+plot_popn_length
 # Model Length vs Stations
 mod_popn_length <- lm(formula = log10(length) ~ log10(popn), 
-                          data = data_lrt_pop %>%
-                        filter(is.na(length_metro) & popn >= 2e+4), na.action = na.omit)
+                          data = data_lrt_pop, na.action = na.omit)
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_popn_length$model$`log10(length)`, 
                         estimate = mod_popn_length$fitted.values)
@@ -398,7 +400,8 @@ plot_popn_stations <- data_lrt_pop %>%
   # Labels
   labs(title = "Stations vs Population") +
   theme_vaw_dark()
-
+# Show plot
+plot_popn_stations
 # Model stations vs Stations
 mod_popn_stations <- lm(formula = log10(stations) ~ log10(popn), 
                           data = data_lrt_pop, na.action = na.omit)
@@ -428,7 +431,8 @@ plot_popn_lines <- data_lrt_pop %>%
   # Labels
   labs(title = "Lines vs Population") +
   theme_vaw_dark()
-
+# Show plot
+plot_popn_lines
 # Model lines vs lines
 mod_popn_lines <- lm(formula = log10(lines) ~ log10(popn), 
                           data = data_lrt_pop, na.action = na.omit)
@@ -439,4 +443,47 @@ yardstick::rsq_trad_vec(truth = mod_popn_lines$model$`log10(lines)`,
 10^(mod_popn_lines$coefficients[1] + (mod_popn_lines$coefficients[2] * log10(1e+5)))
 ```
 
+## Get Population and Topographical Features
+```{r Population and Topology}
+# Fetch road network for city in question ---------------------
+# Create BB for Kalyani
+ymax <- 22.994
+ymin <- 22.957
+xmax <- 88.471
+xmin <- 88.421
+# Create bounding box
+bbox <- c(xmin = xmin, ymin = ymin,
+          xmax = xmax, ymax = ymax)
+
+# Creat polygon from bounding box --------------------------
+# Create bounding box polygon ----------------
+bbox_polygon <- st_bbox(obj = bbox, crs = st_crs(feat_major_road$osm_lines)) %>% 
+  # Convert to sf
+  st_as_sfc()
+
+# # Get main roads
+# feat_major_road <- opq(bbox = bbox, timeout = 100) %>%
+#   add_osm_feature(key = "highway",
+#                   value = c("motorway", "motorway_link",
+#                             "trunk", "trunk_link",
+#                             "primary", "primary_link",
+#                             "secondary", "secondary_link",
+#                             "tertiary", "tertiary_link",
+#                             "unclassified", "residential")) %>%
+#   osmdata_sf()
+# # Save
+# write_rds(x = feat_major_road, file = "kalyani_road.rds")
+feat_major_road <- read_rds(file = "kalyani_road.rds")
+
+# Create sf object combining lines and polygons ----------------------------
+sf_city_road <- bind_rows(feat_major_road$osm_lines %>% 
+                            select(osm_id, highway),
+                          feat_major_road$osm_polygons %>% 
+                            select(osm_id, highway) %>% 
+                            st_cast(to = "LINESTRING")) %>% 
+  # Truncate roads to stay within bounding box
+  st_intersection(y = bbox_polygon)
+
+ggplot(sf_city_road) + geom_sf()
+```
 
