@@ -472,7 +472,8 @@ bbox <- c(xmin = xmin, ymin = ymin,
 feat_major_road <- read_rds(file = "kalyani_road.rds")
 
 # Create bounding box polygon ----------------
-bbox_polygon <- st_bbox(obj = bbox, crs = st_crs(feat_major_road$osm_lines)) %>% 
+bbox_polygon <- st_bbox(obj = bbox, 
+                        crs = st_crs(feat_major_road$osm_lines)) %>% 
   # Convert to sf
   st_as_sfc()
 
@@ -486,15 +487,18 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   st_intersection(y = bbox_polygon)
 
 # Load Population raster ------------------------------
-rs_popn <- terra::rast(x = "GHS_POP_E2030_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif")
-rs_popn <- rs_popn %>% 
+rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif")  %>% 
+  # Crop to city bounding box
   terra::crop(y = terra::vect(x = bbox_polygon %>% 
                                 st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
-  # Transform projection
+  # Change projection
   terra::project(y = "epsg:4326")
 
+
+
 ggplot() + tidyterra::geom_spatraster(data = rs_popn, 
-                                      mapping = aes(fill = GHS_POP_E2030_GLOBE_R2023A_54009_100_V1_0_R7_C27)) +
-  geom_sf(data = sf_city_road, mapping = aes(geometry = geometry))
+                                      mapping = aes(fill = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27)) +
+  geom_sf(data = sf_city_road, mapping = aes(geometry = geometry)) +
+  scale_fill_viridis_c()
 ```
 
