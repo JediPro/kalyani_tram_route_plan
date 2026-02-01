@@ -487,18 +487,70 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   st_intersection(y = bbox_polygon)
 
 # Load Population raster ------------------------------
-rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif")  %>% 
+rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
+  # Remove layers
+  tidyterra::rename(popn = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27) %>% 
   # Crop to city bounding box
   terra::crop(y = terra::vect(x = bbox_polygon %>% 
                                 st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
   # Change projection
   terra::project(y = "epsg:4326")
 
+# Load built up surface raster ------------------------------
+# To be used as proxy for population, since is has higher resolution
+rs_built <- terra::rast(x = "GHS_BUILT_S_E2018_GLOBE_R2023A_54009_10_V1_0_R7_C27.tif")  %>% 
+  `c`(terra::rast(x = "GHS_BUILT_S_NRES_E2018_GLOBE_R2023A_54009_10_V1_0_R7_C27.tif")) %>% 
+  # Rename layers
+  tidyterra::rename(total = GHS_BUILT_S_E2018_GLOBE_R2023A_54009_10_V1_0_R7_C27,
+                    nres = GHS_BUILT_S_NRES_E2018_GLOBE_R2023A_54009_10_V1_0_R7_C27) %>% 
+  # Crop to city bounding box
+  terra::crop(y = terra::vect(x = bbox_polygon %>% 
+                                st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
+  # Calculate residential surface
+  tidyterra::mutate(nres = nres * 100,
+                    res = total - nres,
+                    # recode some values
+                    res = case_when(res < 0 ~ 0, TRUE ~ res)) %>% 
+  # Remove non res and total layers
+  select(-c(total, nres)) %>% 
+  # Change projection
+  terra::project(y = "epsg:4326")
 
+# Create list of Demand Generator points  ---------------------------------
+# These generate travel demand apart from the resident population
+sf_demand_point <- tribble(
+  ~point_name, ~demand, ~lat, ~lon,
+  "Kalyani Railway Station", 25000, 22.96929, 88.46738,
+  "Kalyani Silpanchal Railway Station", 500, 22.97625, 88.45643,
+  "Kalyani Ghoshpara Railway Station", 1000, 22.98163, 88.43940,
+  "Kalyani Simanta Railway Station", 200, 22.98747, 88.42793,
+  "JNM Hospital", 10000, 22.97359, 88.45592,
+  "Vidyasagar Manch", 500, 22.97090, 88.46263,
+  "Kalyani Lake Park", 500, 22.97273, 88.44338,
+  "Kalyani ITI More", 2000, 22.98010, 88.43795,
+  "Kalyani Central Park", 3000, 22.97554, 88.43496,
+  "Buddha Park More", 2000, 22.96325, 88.42791,
+  "Kalyani Stadium", 5000, 22.97496, 88.44936,
+  "Kalyani Municipality", 1000, 22.97693, 88.44724,
+  "A-2 Market", 3000, 22.97335, 88.46369,
+  "A-11 Market", 2000, 22.96443, 88.45425,
+  "B-8 Market", 3000, 22.98277, 88.4328,
+  "B-11 Market", 3000, 22.97599, 88.44339,
+  "Kalyani University", 2000, 22.98567, 88.4455,
+  "JIS College", 2500, 22.95954, 88.44801,
+  "Springdale School", 1000, 22.97733, 88.45174,
+  "Kalyani Experimental School", 1500, 22.97814, 88.44438,
+  "Pannalal School", 1000, 22.97349, 88.43875,
+  "Central Model School", 1000, 22.96927, 88.43008,
+  "Bidhan Girls School", 1000, 22.97827, 88.42866,
+  "Julien Day School", 1000, 22.96361, 88.45992) %>% 
+  # Convert to sf
+  st_as_sf(coords = c("lon", "lat"), crs = st_crs(bbox_polygon))
 
-ggplot() + tidyterra::geom_spatraster(data = rs_popn, 
-                                      mapping = aes(fill = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27)) +
-  geom_sf(data = sf_city_road, mapping = aes(geometry = geometry)) +
+ggplot() +
+  tidyterra::geom_spatraster(data = rs_built, aes(fill = res)) +
+  geom_sf(data = sf_city_road) +
+  geom_sf(data = sf_demand_point, size = 3, colour = "red") +
   scale_fill_viridis_c()
 ```
 
