@@ -552,5 +552,8 @@ ggplot() +
   geom_sf(data = sf_city_road) +
   geom_sf(data = sf_demand_point, size = 3, colour = "red") +
   scale_fill_viridis_c()
+
+ggplot() +
+  geom_sf(data = sf_city_road %>% filter(!highway %in% c("unclassified", "residential")))
 ```
 
