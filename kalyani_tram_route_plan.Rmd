@@ -286,7 +286,7 @@ mod_length_stations <- lm(formula = log10(stations) ~ log10(length),
 yardstick::rsq_trad_vec(truth = mod_length_stations$model$`log10(stations)`, 
                         estimate = mod_length_stations$fitted.values)
 # Prediction
-10^(mod_length_stations$coefficients[1] + (mod_length_stations$coefficients[2] * log10(1)))
+10^(mod_length_stations$coefficients[1] + (mod_length_stations$coefficients[2] * log10(20)))
 
 # Length vs Lines --------------------------------
 # Plot
@@ -316,7 +316,7 @@ mod_length_lines <- lm(formula = log10(lines) ~ log10(length),
 yardstick::rsq_trad_vec(truth = mod_length_lines$model$`log10(lines)`, 
                         estimate = mod_length_lines$fitted.values)
 # Prediction
-10^(mod_length_lines$coefficients[1] + (mod_length_lines$coefficients[2] * log10(7)))
+10^(mod_length_lines$coefficients[1] + (mod_length_lines$coefficients[2] * log10(20)))
 
 # Stations vs Lines --------------------------------
 # Plot
@@ -346,7 +346,7 @@ mod_lines_stations <- lm(formula = log10(stations) ~ log10(lines),
 yardstick::rsq_trad_vec(truth = mod_lines_stations$model$`log10(stations)`, 
                         estimate = mod_lines_stations$fitted.values)
 # Prediction
-10^(mod_lines_stations$coefficients[1] + (mod_lines_stations$coefficients[2] * log10(1)))
+10^(mod_lines_stations$coefficients[1] + (mod_lines_stations$coefficients[2] * log10(2)))
 
 # Population vs Length -------------------------------
 # Plot
@@ -359,6 +359,8 @@ plot_popn_length <- data_lrt_pop %>%
   geom_smooth(mapping = aes(x = popn, y = length), linewidth = 1,
               colour = "dodgerblue", alpha = 0.2, fill = "dodgerblue", 
               method = "lm") +
+  # Ab line at Kalyani popun
+  geom_vline(mapping = aes(xintercept = 1.5e+5), colour = "white", alpha = 0.7, linetype = "dashed") +
   # Scales
   scale_x_continuous(name = "Population", 
                      labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
@@ -377,7 +379,7 @@ mod_popn_length <- lm(formula = log10(length) ~ log10(popn),
 yardstick::rsq_trad_vec(truth = mod_popn_length$model$`log10(length)`, 
                         estimate = mod_popn_length$fitted.values)
 # Prediction
-10^(mod_popn_length$coefficients[1] + (mod_popn_length$coefficients[2] * log10(1e+5)))
+10^(mod_popn_length$coefficients[1] + (mod_popn_length$coefficients[2] * log10(1.5e+5)))
 
 
 # Population vs Stations -------------------------------
@@ -550,4 +552,29 @@ ggplot() +
   # geom_sf(data = sf_demand_point, size = 3, colour = "red") +
   scale_fill_viridis_b(breaks = c(5, 50, 100, 150, 200))
 ```
+
+## Workflow
+- Get road network
+- Fetch population raster
+- Define Point Generators of demand
+- Set number of stations and lines
+- Create random set of points as stations
+- Create distance matrix from points to each cell in raster
+- Create distance matrix from points to point demand generators
+- Calculate objective function value
+- Run optimization algorithm
+
+```{r Objective Function for Station Locations}
+# From linear regression, we get values of length, lines and stations -----------
+# Length - 20km | 30km
+# Stations - 30 | 45
+# Lines - 2 | 3
+
+# 
+
+
+
+
+```
+
 
