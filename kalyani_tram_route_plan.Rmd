@@ -28,6 +28,7 @@ library(patchwork)
 library(ggfittext)
 library(rvest)
 library(osmdata)
+library(terra)
 
 # Load themes script
 source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
@@ -482,18 +483,20 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   st_intersection(y = sf_city_limits)
 
 # Load Population raster ------------------------------
-rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
+rs_popn <- rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
   # Remove layers
   tidyterra::rename(popn = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27) %>% 
   # Crop to city bounding box
-  terra::crop(y = terra::vect(x = sf_bbox %>% 
+  crop(y = vect(x = sf_bbox %>% 
                                 st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
   # Change projection
-  terra::project(y = "epsg:4326") %>% 
+  project(y = "epsg:4326") %>% 
   # Mask values outside city limits
-  terra::mask(mask = sf_city_limits, inverse = FALSE, updatevalue = NA) %>% 
+  mask(mask = sf_city_limits, inverse = FALSE, updatevalue = NA) %>% 
   # The high population area is incorrect, change values
   tidyterra::mutate(popn = case_when(popn >= 270 ~ 100, TRUE ~ popn))
+# Write to disk
+# terra::writeRaster(x = rs_popn, filename = "raster_city_popn.tif", overwrite = TRUE)
 
 # # Load built up surface raster ------------------------------
 # # To be used as proxy for population, since is has higher resolution
@@ -544,13 +547,14 @@ sf_demand_point <- tribble(
     "Bidhan Girls School", 1000, 22.97827, 88.42866,
     "Julien Day School", 1000, 22.96361, 88.45992) %>% 
   # Convert to sf
-  st_as_sf(coords = c("lon", "lat"), crs = st_crs(bbox_polygon))
+  st_as_sf(coords = c("lon", "lat"), crs = st_crs(sf_bbox))
 
 ggplot() +
-  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  # tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  tidyterra::geom_spatraster(data = dist_station, aes(fill = popn)) +
   geom_sf(data = sf_city_road) +
-  # geom_sf(data = sf_demand_point, size = 3, colour = "red") +
-  scale_fill_viridis_b(breaks = c(5, 50, 100, 150, 200))
+  geom_sf(data = vc_station, size = 3, colour = "red") +
+  scale_fill_viridis_c()
 ```
 
 ## Workflow
@@ -570,7 +574,17 @@ ggplot() +
 # Stations - 30 | 45
 # Lines - 2 | 3
 
-# 
+# Set system parameters ------------------
+param_n_station <- 30
+param_n_line <- 2
+
+# Define initial set of parameters --------------------
+vc_station <- st_sample(x = sf_city_limits, size = param_n_station) %>% 
+  # convert to SpatVector
+  vect()
+# Calculate distance from each point to all cells of raster
+dist_station <- distance(x = rs_popn, y = vc_station)
+
 
 
 
