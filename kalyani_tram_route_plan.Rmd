@@ -551,10 +551,10 @@ sf_demand_point <- tribble(
 
 ggplot() +
   # tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
-  tidyterra::geom_spatraster(data = dist_station, aes(fill = popn)) +
+  tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
   geom_sf(data = sf_city_road) +
   geom_sf(data = vc_station, size = 3, colour = "red") +
-  scale_fill_viridis_c()
+  scale_fill_viridis_b()
 ```
 
 ## Workflow
@@ -577,14 +577,64 @@ ggplot() +
 # Set system parameters ------------------
 param_n_station <- 30
 param_n_line <- 2
+param_sd_sat_dist <- 400
 
-# Define initial set of parameters --------------------
-vc_station <- st_sample(x = sf_city_limits, size = param_n_station) %>% 
-  # convert to SpatVector
-  vect()
-# Calculate distance from each point to all cells of raster
-dist_station <- distance(x = rs_popn, y = vc_station)
+# Define function to calculate population served by each station --------------------
+fx_popn_served <- function(sf_station_point){
+  
+  # sf_station_point = sf_station$geometry[1]
+  
+  # Calculate population
+  popn_serve_station <- sf_station_point %>%
+    # Convert to sf object
+    st_sfc(crs = st_crs(sf_genome_station)) %>% 
+    # Convert to Spat Vector
+    vect() %>% 
+    terra::distance(x = rs_popn, y = .) %>% 
+    # Calculate population satisfied by each station, first calculate multiplier for each cell
+    tidyterra::mutate(popn = exp(-(popn^2)/(param_sd_sat_dist^2))) %>%
+    # Multiply with the actual population in each
+    `*`(rs_popn) %>%
+    # Calculate total sum
+    terra::global("sum", na.rm = TRUE) %>%
+    unlist(use.names = FALSE)
+  
+  return(popn_serve_station)
+}
 
+# Define sample station points ---------------------
+sf_genome_station <- st_sample(x = sf_city_limits, size = param_n_station) %>% 
+  # Convert to sf
+  st_sf(geometry = .) %>% 
+  # Set index number
+  mutate(station_index = row_number())
+
+# Calculate share of point demand generators served by point generators ----------------------
+sf_station_point_served <- sf_genome_station %>% 
+  # Calculate distance to each point point generator
+  st_distance(y = sf_demand_point, by_element = FALSE) %>% 
+  # Convert to matrix
+  as.matrix() %>% 
+  # Drop units due to matrix operations being hampered when sf is loaded
+  units::drop_units() %>% 
+  # Calculate multiplier for demand based on distance
+  (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
+  # Multiply by demand generated  by each point
+  `%*%` (sf_demand_point$demand) %>% 
+  as.data.frame() %>% 
+  # Convert to tibble
+  as_tibble() %>% 
+  rename(generator_popn_served = V1)
+
+# Calculate share of resident population served by stations ------------------
+sf_station_popn_served <- sf_genome_station %>% 
+  # Apply function
+  mutate(popn_served = map_dbl(.x = geometry, 
+                               .f = fx_popn_served, .progress = TRUE)) %>% 
+  bind_cols(sf_station_point_served)
+
+
+  
 
 
 
