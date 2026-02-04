@@ -29,6 +29,7 @@ library(ggfittext)
 library(rvest)
 library(osmdata)
 library(terra)
+library(GA)
 
 # Load themes script
 source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
@@ -453,8 +454,7 @@ sf_city_limits <- st_read(dsn = "kalyani_wb_municipality_limits.kml") %>%
   st_zm()
 
 # Create bbox for city limits ----------------------
-bbox <- st_bbox(sf_city_limits)
-sf_bbox <-  bbox %>% 
+sf_bbox <- st_bbox(sf_city_limits) %>% 
   # Convert to sf
   st_as_sfc(crs = st_crs(sf_city_limits))
 
@@ -550,10 +550,10 @@ sf_demand_point <- tribble(
   st_as_sf(coords = c("lon", "lat"), crs = st_crs(sf_bbox))
 
 ggplot() +
-  # tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
-  tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
+  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  # tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
   geom_sf(data = sf_city_road) +
-  geom_sf(data = vc_station, size = 3, colour = "red") +
+  # geom_sf(data = vc_station, size = 3, colour = "red") +
   scale_fill_viridis_b()
 ```
 
@@ -581,9 +581,7 @@ param_sd_sat_dist <- 400
 
 # Define function to calculate population served by each station --------------------
 fx_popn_served <- function(sf_station_point){
-  
   # sf_station_point = sf_station$geometry[1]
-  
   # Calculate population
   popn_serve_station <- sf_station_point %>%
     # Convert to sf object
@@ -599,7 +597,7 @@ fx_popn_served <- function(sf_station_point){
     terra::global("sum", na.rm = TRUE) %>%
     unlist(use.names = FALSE)
   
-  return(popn_serve_station)
+  return(round(popn_serve_station))
 }
 
 # Define sample station points ---------------------
@@ -624,15 +622,36 @@ sf_station_point_served <- sf_genome_station %>%
   as.data.frame() %>% 
   # Convert to tibble
   as_tibble() %>% 
-  rename(generator_popn_served = V1)
+  rename(generator_popn_served = V1) %>% 
+  # Round figure
+  mutate(generator_popn_served = round(generator_popn_served))
 
 # Calculate share of resident population served by stations ------------------
-sf_station_popn_served <- sf_genome_station %>% 
+data_station_popn_served <- sf_genome_station %>% 
   # Apply function
   mutate(popn_served = map_dbl(.x = geometry, 
                                .f = fx_popn_served, .progress = TRUE)) %>% 
+  # Map Point generator fields
   bind_cols(sf_station_point_served)
 
+# Calculate total popn served -------------------------------------
+sc_total_popn_served <- data_station_popn_served %>% 
+  # Add up both types of popn served for each station
+  mutate(total_popn = popn_served + generator_popn_served) %>% 
+  # Sum up to get total popn
+  as_tibble() %>% 
+  select(total_popn) %>% 
+  sum()
+
+# Define functions for GA -------------------------
+
+# Create GA function ------------------------------------------
+obj_ga_station <- ga(type = "real-valued", fitness = fx_ga_fitness, 
+                     population = fx_ga_popn, selection = fx_ga_select, 
+                     crossover = fx_ga_cross, mutation = fx_ga_mutate, 
+                     popSize = 500, pcrossover = 0.8, pmutation = 0.01, 
+                     elitism = max(1, round(popSize * 0.03)), maxiter = 1000, 
+                     run = 100)
 
   
 
