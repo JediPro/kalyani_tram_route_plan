@@ -579,15 +579,15 @@ param_n_station <- 30
 param_n_line <- 2
 param_sd_sat_dist <- 400
 
-# Define function to calculate population served by each station --------------------
-fx_popn_served <- function(sf_station_point){
-  # sf_station_point = sf_station$geometry[1]
-  # Calculate population
+# Define function to calculate distances and popn served ---------------------
+fx_point_raster_dist <- function(sf_station_point){
+  # Calculate resident population served
   popn_serve_station <- sf_station_point %>%
-    # Convert to sf object
-    st_sfc(crs = st_crs(sf_genome_station)) %>% 
+    # Convert point to CRS object
+    st_sfc(crs = 4326) %>% 
     # Convert to Spat Vector
-    vect() %>% 
+    terra::vect() %>% 
+    # Calculate distance matrix
     terra::distance(x = rs_popn, y = .) %>% 
     # Calculate population satisfied by each station, first calculate multiplier for each cell
     tidyterra::mutate(popn = exp(-(popn^2)/(param_sd_sat_dist^2))) %>%
@@ -596,60 +596,69 @@ fx_popn_served <- function(sf_station_point){
     # Calculate total sum
     terra::global("sum", na.rm = TRUE) %>%
     unlist(use.names = FALSE)
-  
+
   return(round(popn_serve_station))
 }
 
-# Define sample station points ---------------------
-sf_genome_station <- st_sample(x = sf_city_limits, size = param_n_station) %>% 
-  # Convert to sf
-  st_sf(geometry = .) %>% 
-  # Set index number
-  mutate(station_index = row_number())
+# Define function to calculate population served by each station --------------------
+fx_ga_fitness <- function(vec_individual){
+  # fgh <- mtx_popn[1,]
+  
+  # Create sf object 
+  sf_indiv_stations <- vec_individual %>% 
+    matrix(ncol = 2, byrow = TRUE) %>% 
+    as.data.frame() %>% 
+    # Convert to tibble
+    as_tibble() %>%
+    rename(lon = V1, lat = V2) %>% 
+    # Convert to sf
+    st_as_sf(coords = c("lon", "lat"), crs = 4326)
+  
+  # Calculate share of point demand generators served by point generators ----------------------
+  data_station_point_served <- sf_indiv_stations %>% 
+    # Calculate distance to each point point generator
+    st_distance(y = sf_demand_point, by_element = FALSE) %>% 
+    # Convert to matrix
+    as.matrix() %>% 
+    # Drop units due to matrix operations being hampered when sf is loaded
+    units::drop_units() %>% 
+    # Calculate multiplier for demand based on distance
+    (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
+    # Multiply by demand generated  by each point
+    `%*%` (sf_demand_point$demand) %>% 
+    as.data.frame() %>% 
+    # Convert to tibble
+    as_tibble() %>% 
+    rename(generator_popn_served = V1) %>% 
+    # Round figure
+    mutate(generator_popn_served = round(generator_popn_served))
+  
+  # Calculate share of resident population served by stations ------------------
+  data_station_popn_served <- sf_indiv_stations %>% 
+    # Apply function
+    mutate(popn_served = map_dbl(.x = geometry, 
+                                 .f = fx_point_raster_dist, .progress = TRUE)) %>% 
+    # Map Point generator fields
+    bind_cols(data_station_point_served)
+  
+  # Calculate total popn served -------------------------------------
+  sc_total_popn_served <- data_station_popn_served %>% 
+    # Add up both types of popn served for each station
+    mutate(total_popn = popn_served + generator_popn_served) %>% 
+    # Sum up to get total popn
+    as_tibble() %>% 
+    select(total_popn) %>% 
+    sum()
+  
+  return(sc_total_popn_served)
+}
 
-fgh <- sf_genome_station %>% st_coordinates() %>% t() %>% as.vector()
-
-# Calculate share of point demand generators served by point generators ----------------------
-sf_station_point_served <- sf_genome_station %>% 
-  # Calculate distance to each point point generator
-  st_distance(y = sf_demand_point, by_element = FALSE) %>% 
-  # Convert to matrix
-  as.matrix() %>% 
-  # Drop units due to matrix operations being hampered when sf is loaded
-  units::drop_units() %>% 
-  # Calculate multiplier for demand based on distance
-  (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
-  # Multiply by demand generated  by each point
-  `%*%` (sf_demand_point$demand) %>% 
-  as.data.frame() %>% 
-  # Convert to tibble
-  as_tibble() %>% 
-  rename(generator_popn_served = V1) %>% 
-  # Round figure
-  mutate(generator_popn_served = round(generator_popn_served))
-
-# Calculate share of resident population served by stations ------------------
-data_station_popn_served <- sf_genome_station %>% 
-  # Apply function
-  mutate(popn_served = map_dbl(.x = geometry, 
-                               .f = fx_popn_served, .progress = TRUE)) %>% 
-  # Map Point generator fields
-  bind_cols(sf_station_point_served)
-
-# Calculate total popn served -------------------------------------
-sc_total_popn_served <- data_station_popn_served %>% 
-  # Add up both types of popn served for each station
-  mutate(total_popn = popn_served + generator_popn_served) %>% 
-  # Sum up to get total popn
-  as_tibble() %>% 
-  select(total_popn) %>% 
-  sum()
-
-# Create function for Population Initiation -------------------------
+# Function for Population Initiation -------------------------
 fx_ga_init_popn <- function(obj_ga){
   # popn_size <- 200
   # Create population matrix
-  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>% 
+  # mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>% 
+  mtx_popn <- tibble(indiv_index = 1:10) %>% 
     # Create sf vector of sample points for each individual
     mutate(sf_sample = map(.x = indiv_index, .f = function(x){
       # Generate samples for eaqch individual
@@ -672,7 +681,7 @@ fx_ga_init_popn <- function(obj_ga){
   return(mtx_popn)
 }
 
-# Create function for Population Selection --------------------------
+# Function for Population Selection --------------------------
 fx_ga_select_popn <- function(obj_ga){
   # Extract fitness value of current generation
   ga_curr_fitness <- obj_ga@fitness
@@ -689,7 +698,8 @@ fx_ga_select_popn <- function(obj_ga){
   return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
 }
 
-# 
+# Function to implement mutation --------------------------
+
 
 # Create GA function ------------------------------------------
 obj_ga_station <- ga(type = "real-valued", fitness = fx_ga_fitness, 
