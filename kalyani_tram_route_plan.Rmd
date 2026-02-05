@@ -549,12 +549,12 @@ sf_demand_point <- tribble(
   # Convert to sf
   st_as_sf(coords = c("lon", "lat"), crs = st_crs(sf_bbox))
 
-ggplot() +
-  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
-  # tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
-  geom_sf(data = sf_city_road) +
-  # geom_sf(data = vc_station, size = 3, colour = "red") +
-  scale_fill_viridis_b()
+# ggplot() +
+#   tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+#   tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
+#   geom_sf(data = sf_city_road) +
+#   geom_sf(data = vc_station, size = 3, colour = "red") +
+#   scale_fill_viridis_b()
 ```
 
 ## Workflow
@@ -607,6 +607,8 @@ sf_genome_station <- st_sample(x = sf_city_limits, size = param_n_station) %>%
   # Set index number
   mutate(station_index = row_number())
 
+fgh <- sf_genome_station %>% st_coordinates() %>% t() %>% as.vector()
+
 # Calculate share of point demand generators served by point generators ----------------------
 sf_station_point_served <- sf_genome_station %>% 
   # Calculate distance to each point point generator
@@ -643,13 +645,57 @@ sc_total_popn_served <- data_station_popn_served %>%
   select(total_popn) %>% 
   sum()
 
-# Define functions for GA -------------------------
+# Create function for Population Initiation -------------------------
+fx_ga_init_popn <- function(obj_ga){
+  # popn_size <- 200
+  # Create population matrix
+  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>% 
+    # Create sf vector of sample points for each individual
+    mutate(sf_sample = map(.x = indiv_index, .f = function(x){
+      # Generate samples for eaqch individual
+      st_sample(x = sf_city_limits, size = param_n_station) %>% 
+        # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
+        st_coordinates() %>% t() %>% as.vector()
+    }, .progress = TRUE)) %>% 
+    # Remove list column
+    unnest(cols = sf_sample) %>% 
+    # Assign column names
+    group_by(indiv_index) %>% 
+    mutate(col_name = row_number()) %>% 
+    ungroup() %>% 
+    # Wide form
+    pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>% 
+    # Convert to matrix
+    select(-indiv_index) %>% 
+    as.matrix()
+  
+  return(mtx_popn)
+}
+
+# Create function for Population Selection --------------------------
+fx_ga_select_popn <- function(obj_ga){
+  # Extract fitness value of current generation
+  ga_curr_fitness <- obj_ga@fitness
+  # Assign probabilities to each individual, proportional to the fitness value
+  curr_probs <- ga_curr_fitness/sum(ga_curr_fitness)
+  # Select indices of individuals from population, but based on their fitness
+  popn_sel <- sample(x = 1:obj_ga@popSize, size = obj_ga@popSize, 
+                     replace = TRUE, prob = curr_probs)
+  
+  # Select individuals from population\
+  mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
+  vec_popn_fitness <- obj_ga@fitness[popn_sel]
+  
+  return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
+}
+
+# 
 
 # Create GA function ------------------------------------------
 obj_ga_station <- ga(type = "real-valued", fitness = fx_ga_fitness, 
                      population = fx_ga_popn, selection = fx_ga_select, 
                      crossover = fx_ga_cross, mutation = fx_ga_mutate, 
-                     popSize = 500, pcrossover = 0.8, pmutation = 0.01, 
+                     popSize = 200, pcrossover = 0.8, pmutation = 0.01, 
                      elitism = max(1, round(popSize * 0.03)), maxiter = 1000, 
                      run = 100)
 
