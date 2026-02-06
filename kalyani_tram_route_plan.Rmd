@@ -572,11 +572,6 @@ sf_demand_point <- tribble(
 # Stations - 30 | 45
 # Lines - 2 | 3
 
-# Set system parameters ------------------
-param_n_station <- 30
-param_n_line <- 2
-param_sd_sat_dist <- 400
-
 # Define sample matrix for functions ---------------------
 mtx_popn_sample <- tibble(indiv_index = 1:10) %>% 
     # Create sf vector of sample points for each individual
@@ -734,11 +729,8 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
   # Extract population matrix from GA object
   mtx_popn <- obj_ga@population
   
-  print(parent_indices)
-  
-  # Create tibble of coordinate points --------------------
-  mtx_children <- mtx_popn %>% 
-    `[`(parent_indices[,1], ) %>% 
+  # Create tibble of coordinate points
+  mtx_children <- mtx_popn[parent_indices,] %>% 
     # Convert to tibble
     as_tibble() %>% 
     # Add identifiers
@@ -746,7 +738,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
     # Long form
     pivot_longer(cols = -parent_index, names_to = "coord", values_to = "value") %>% 
     # Recode values
-    mutate(coord = as.integer(coord),
+    mutate(coord = str_extract(string = coord, pattern = "\\d{1,}") %>% as.integer,
            # Mark lats and lons
            coord = case_when(coord %% 2 == 1 ~ "lon", coord %% 2 == 0 ~ "lat")) %>% 
     group_by(parent_index) %>% 
@@ -767,7 +759,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
            lat_m = case_when(swap ~ lat_f, TRUE ~ lat_m),
            # Graft mother on to father
            lon_f = case_when(swap ~ lon_z, TRUE ~ lon_f),
-           lat_f = case_when(swap ~ lat_z, TRUE ~ lat_f)) %>% 
+           lat_f = case_when(swap ~ lat_z, TRUE ~ lat_f))  %>% 
     # Remove temp vars
     select(-c(contains("_z"), swap)) %>% 
     # Switch back to matrix form
@@ -786,14 +778,16 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
     pivot_wider(id_cols = parent_index, names_from = point_index, 
                 values_from = value) %>% 
     select(-parent_index) %>% 
-    # Matrix of children
+    # Convert to matrix
     as.matrix()
+  
   print("Population Crossover operation completed!")
-  return(list(population = mtx_children, fitness = c(NA_real_, NA_real_)))
+  return(list(children = mtx_children,
+              fitness = c(NA_real_, NA_real_)))
 }
 
 # Function to implement mutation ----------------------------------
-fx_ga_mutate_popn <- function(ga_obj, parent_index, std_mutation_shift, p_mutation_subset){
+fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutation_subset){
   # mtx_popn = mtx_popn_sample
   # parent_index = c(2)
   # std_mutation_shift = 0.1
@@ -807,7 +801,7 @@ fx_ga_mutate_popn <- function(ga_obj, parent_index, std_mutation_shift, p_mutati
                                                    st_coordinates %>% 
                                                    `[`(2) * pi/180))
   
-  # Create tibble of coordinate points --------------------
+  # Create tibble of coordinate points
   vec_mutant <- mtx_popn %>% 
     `[`(parent_index, ) %>% 
     # Convert to tibble
@@ -855,7 +849,7 @@ fx_ga_mutate_popn <- function(ga_obj, parent_index, std_mutation_shift, p_mutati
     # Convert to vector
     unlist(use.names = FALSE)
     
-  print("Population Crossover operation completed!")
+  print("Population Mutation operation completed!")
   return(vec_mutant)
 }
 
@@ -868,7 +862,11 @@ vec_bounds <- sf_bbox %>%
   summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
   unlist()
 # Set population size
-popSize <- 100
+popSize <- 20
+# Set system parameters
+param_n_station <- 30
+param_n_line <- 2
+param_sd_sat_dist <- 400
 
 # Create GA object
 obj_ga_station <- GA::ga(type = "real-valued", 
@@ -883,9 +881,9 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          mutation = function(...) fx_ga_mutate_popn(..., std_mutation_shift = 0.1, p_mutation_subset = 0.2),
                          popSize = popSize, 
                          pcrossover = 0.8, 
-                         pmutation = 0.01, 
+                         pmutation = 0.2, 
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 3, 
+                         maxiter = 100, 
                          run = 100, 
                          monitor = TRUE)
 
