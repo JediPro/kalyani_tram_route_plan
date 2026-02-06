@@ -28,8 +28,6 @@ library(patchwork)
 library(ggfittext)
 library(rvest)
 library(osmdata)
-library(terra)
-library(GA)
 
 # Load themes script
 source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
@@ -483,16 +481,16 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   st_intersection(y = sf_city_limits)
 
 # Load Population raster ------------------------------
-rs_popn <- rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
+rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
   # Remove layers
   tidyterra::rename(popn = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27) %>% 
   # Crop to city bounding box
-  crop(y = vect(x = sf_bbox %>% 
+  crop(y = terra::vect(x = sf_bbox %>% 
                                 st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
   # Change projection
-  project(y = "epsg:4326") %>% 
+  terra::project(y = "epsg:4326") %>% 
   # Mask values outside city limits
-  mask(mask = sf_city_limits, inverse = FALSE, updatevalue = NA) %>% 
+  terra::mask(mask = sf_city_limits, inverse = FALSE, updatevalue = NA) %>% 
   # The high population area is incorrect, change values
   tidyterra::mutate(popn = case_when(popn >= 270 ~ 100, TRUE ~ popn))
 # Write to disk
@@ -702,7 +700,7 @@ fx_ga_select_popn <- function(obj_ga){
 
 
 # Create GA function ------------------------------------------
-obj_ga_station <- ga(type = "real-valued", fitness = fx_ga_fitness, 
+obj_ga_station <- GA::ga(type = "real-valued", fitness = fx_ga_fitness, 
                      population = fx_ga_popn, selection = fx_ga_select, 
                      crossover = fx_ga_cross, mutation = fx_ga_mutate, 
                      popSize = 200, pcrossover = 0.8, pmutation = 0.01, 
