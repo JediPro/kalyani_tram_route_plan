@@ -485,7 +485,7 @@ rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif
   # Remove layers
   tidyterra::rename(popn = GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27) %>% 
   # Crop to city bounding box
-  crop(y = terra::vect(x = sf_bbox %>% 
+  terra::crop(y = terra::vect(x = sf_bbox %>% 
                                 st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m"))) %>% 
   # Change projection
   terra::project(y = "epsg:4326") %>% 
@@ -577,6 +577,27 @@ param_n_station <- 30
 param_n_line <- 2
 param_sd_sat_dist <- 400
 
+# Define sample matrix for functions ---------------------
+mtx_popn_sample <- tibble(indiv_index = 1:10) %>% 
+    # Create sf vector of sample points for each individual
+    mutate(sf_sample = map(.x = indiv_index, .f = function(x){
+      # Generate samples for eaqch individual
+      st_sample(x = sf_city_limits, size = param_n_station) %>% 
+        # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
+        st_coordinates() %>% t() %>% as.vector()
+    }, .progress = TRUE)) %>% 
+    # Remove list column
+    unnest(cols = sf_sample) %>% 
+    # Assign column names
+    group_by(indiv_index) %>% 
+    mutate(col_name = row_number()) %>% 
+    ungroup() %>% 
+    # Wide form
+    pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>% 
+    # Convert to matrix
+    select(-indiv_index) %>% 
+    as.matrix()
+
 # Define function to calculate distances and popn served ---------------------
 fx_point_raster_dist <- function(sf_station_point){
   # Calculate resident population served
@@ -601,7 +622,7 @@ fx_point_raster_dist <- function(sf_station_point){
 # Define function to calculate population served by each station --------------------
 fx_ga_fitness <- function(vec_individual){
   # fgh <- mtx_popn[1,]
-  
+  print("Fitness calculation started ...")
   # Create sf object 
   sf_indiv_stations <- vec_individual %>% 
     matrix(ncol = 2, byrow = TRUE) %>% 
@@ -612,7 +633,7 @@ fx_ga_fitness <- function(vec_individual){
     # Convert to sf
     st_as_sf(coords = c("lon", "lat"), crs = 4326)
   
-  # Calculate share of point demand generators served by point generators ----------------------
+  # Calculate share of point demand generators served by point generators
   data_station_point_served <- sf_indiv_stations %>% 
     # Calculate distance to each point point generator
     st_distance(y = sf_demand_point, by_element = FALSE) %>% 
@@ -631,7 +652,7 @@ fx_ga_fitness <- function(vec_individual){
     # Round figure
     mutate(generator_popn_served = round(generator_popn_served))
   
-  # Calculate share of resident population served by stations ------------------
+  # Calculate share of resident population served by stations
   data_station_popn_served <- sf_indiv_stations %>% 
     # Apply function
     mutate(popn_served = map_dbl(.x = geometry, 
@@ -639,7 +660,7 @@ fx_ga_fitness <- function(vec_individual){
     # Map Point generator fields
     bind_cols(data_station_point_served)
   
-  # Calculate total popn served -------------------------------------
+  # Calculate total popn served
   sc_total_popn_served <- data_station_popn_served %>% 
     # Add up both types of popn served for each station
     mutate(total_popn = popn_served + generator_popn_served) %>% 
@@ -648,15 +669,18 @@ fx_ga_fitness <- function(vec_individual){
     select(total_popn) %>% 
     sum()
   
+  print("Fitness calculation complete!")
+  
   return(sc_total_popn_served)
 }
 
 # Function for Population Initiation -------------------------
 fx_ga_init_popn <- function(obj_ga){
   # popn_size <- 200
+  print("Initial Population Generation started ...")
   # Create population matrix
-  # mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>% 
-  mtx_popn <- tibble(indiv_index = 1:10) %>% 
+  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>%
+  # mtx_popn <- tibble(indiv_index = 1:10) %>% 
     # Create sf vector of sample points for each individual
     mutate(sf_sample = map(.x = indiv_index, .f = function(x){
       # Generate samples for eaqch individual
@@ -676,11 +700,14 @@ fx_ga_init_popn <- function(obj_ga){
     select(-indiv_index) %>% 
     as.matrix()
   
+  print("Initial Population generated!")
+  
   return(mtx_popn)
 }
 
 # Function for Population Selection --------------------------
 fx_ga_select_popn <- function(obj_ga){
+  print("Population Selection process started ...")
   # Extract fitness value of current generation
   ga_curr_fitness <- obj_ga@fitness
   # Assign probabilities to each individual, proportional to the fitness value
@@ -693,19 +720,174 @@ fx_ga_select_popn <- function(obj_ga){
   mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
   vec_popn_fitness <- obj_ga@fitness[popn_sel]
   
+  print("Population Selection process complete!")
+  
   return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
 }
 
 # Function to implement mutation --------------------------
+fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
+  # mtx_popn = mtx_popn_sample
+  # parent_indices = matrix(data = c(1, 3), nrow = 2)
+  # p_cross_subset = 0.5
+  print("Population Crossover operation started ...")
+  # Extract population matrix from GA object
+  mtx_popn <- obj_ga@population
+  
+  print(parent_indices)
+  
+  # Create tibble of coordinate points --------------------
+  mtx_children <- mtx_popn %>% 
+    `[`(parent_indices[,1], ) %>% 
+    # Convert to tibble
+    as_tibble() %>% 
+    # Add identifiers
+    mutate(parent_index = c("m", "f")) %>% 
+    # Long form
+    pivot_longer(cols = -parent_index, names_to = "coord", values_to = "value") %>% 
+    # Recode values
+    mutate(coord = as.integer(coord),
+           # Mark lats and lons
+           coord = case_when(coord %% 2 == 1 ~ "lon", coord %% 2 == 0 ~ "lat")) %>% 
+    group_by(parent_index) %>% 
+    # Create an index for each point, consisting of pairs of coordinates
+    mutate(point_index = case_when(coord == "lon" ~ 1, TRUE ~ 0),
+           point_index = cumsum(point_index)) %>% 
+    ungroup() %>% 
+    # Wide aqain
+    pivot_wider(id_cols = c(point_index), 
+                names_from = c(coord, parent_index), values_from = value) %>% 
+    # Sample points wherein to conduct swap
+    mutate(swap = sample(x = c(TRUE, FALSE), size = nrow(.), replace = TRUE, 
+                         prob = c(p_cross_subset, 1 - p_cross_subset)),
+           # Create temp variable to contain the temp variable
+           lon_z = lon_m, lat_z = lat_m,
+           # Graft father on to mother
+           lon_m = case_when(swap ~ lon_f, TRUE ~ lon_m),
+           lat_m = case_when(swap ~ lat_f, TRUE ~ lat_m),
+           # Graft mother on to father
+           lon_f = case_when(swap ~ lon_z, TRUE ~ lon_f),
+           lat_f = case_when(swap ~ lat_z, TRUE ~ lat_f)) %>% 
+    # Remove temp vars
+    select(-c(contains("_z"), swap)) %>% 
+    # Switch back to matrix form
+    pivot_longer(cols = -point_index, names_to = c("coord", "parent_index"), 
+                 names_pattern = "(.*)_(.`*)", values_to = "value") %>% 
+    # Index the coords
+    mutate(coord = factor(x = coord, levels = c("lon", "lat")),
+           parent_index = factor(x = parent_index, levels = c("m", "f"))) %>% 
+    # Arrange
+    arrange(parent_index, point_index, coord) %>% 
+    # Recode indices
+    group_by(parent_index) %>% 
+    mutate(point_index = row_number()) %>% 
+    ungroup() %>% 
+    # Wide form
+    pivot_wider(id_cols = parent_index, names_from = point_index, 
+                values_from = value) %>% 
+    select(-parent_index) %>% 
+    # Matrix of children
+    as.matrix()
+  print("Population Crossover operation completed!")
+  return(list(population = mtx_children, fitness = c(NA_real_, NA_real_)))
+}
 
+# Function to implement mutation ----------------------------------
+fx_ga_mutate_popn <- function(ga_obj, parent_index, std_mutation_shift, p_mutation_subset){
+  # mtx_popn = mtx_popn_sample
+  # parent_index = c(2)
+  # std_mutation_shift = 0.1
+  # p_mutation_subset = 0.5
+  print("Population Mutation operation started ...")
+  # Extract population matrix from GA object
+  mtx_popn <- obj_ga@population
+  # Define shifts in coordinates needed 
+  dist_lat <- std_mutation_shift / 111.321
+  dist_lon <- std_mutation_shift / (111.321 * cos(st_centroid(x = sf_bbox) %>% 
+                                                   st_coordinates %>% 
+                                                   `[`(2) * pi/180))
+  
+  # Create tibble of coordinate points --------------------
+  vec_mutant <- mtx_popn %>% 
+    `[`(parent_index, ) %>% 
+    # Convert to tibble
+    as_tibble_col() %>% 
+    # Recode values
+    mutate(coord = row_number(),
+           # Mark lats and lons
+           coord = case_when(coord %% 2 == 1 ~ "lon", coord %% 2 == 0 ~ "lat")) %>% 
+    # Create an index for each point, consisting of pairs of coordinates
+    mutate(point_index = case_when(coord == "lon" ~ 1, TRUE ~ 0),
+           point_index = cumsum(point_index)) %>% 
+    # Wide aqain
+    pivot_wider(id_cols = c(point_index), 
+                names_from = c(coord), values_from = value) %>% 
+    # Sample points to mutate
+    mutate(mutate = sample(x = c(1, 0), size = nrow(.), replace = TRUE, 
+                         prob = c(p_mutation_subset, 1 - p_mutation_subset)),
+           # Shift coordinates by some points
+           lon_new = lon + (rnorm(n = nrow(.), mean = 0, sd = dist_lon) * mutate),
+           lat_new = lat + (rnorm(n = nrow(.), mean = 0, sd = dist_lat) * mutate),
+           # Create non geometry fields
+           lon_fix = lon_new, lat_fix = lat_new) %>% 
+    # Convert to sf
+    st_as_sf(coords = c("lon_new", "lat_new"), crs = 4326) %>% 
+    # Flag points which fall within the city limits
+    mutate(intersects = st_intersects(x = geometry,  y = sf_city_limits, sparse = FALSE)[1,],
+           # If any point is outside city limits, revert to initial coordinates
+           lon_fix = case_when(!intersects ~ lon, TRUE ~ lon_fix),
+           lat_fix = case_when(!intersects ~ lat, TRUE ~ lat_fix)) %>% 
+    # Convert back to tibble
+    as_tibble() %>% 
+    # Remove temp vars
+    select(point_index, lon_fix, lat_fix) %>% 
+    # Switch back to matrix form
+    pivot_longer(cols = -point_index, names_to = c("coord"), 
+                 names_pattern = "(.*)_fix", values_to = "value") %>% 
+    # Index the coords
+    mutate(coord = factor(x = coord, levels = c("lon", "lat"))) %>% 
+    # Arrange
+    arrange(point_index, coord) %>% 
+    # Recode indices
+    mutate(point_index = row_number()) %>% 
+    # Remove field
+    select(value) %>% 
+    # Convert to vector
+    unlist(use.names = FALSE)
+    
+  print("Population Crossover operation completed!")
+  return(vec_mutant)
+}
 
 # Create GA function ------------------------------------------
-obj_ga_station <- GA::ga(type = "real-valued", fitness = fx_ga_fitness, 
-                     population = fx_ga_popn, selection = fx_ga_select, 
-                     crossover = fx_ga_cross, mutation = fx_ga_mutate, 
-                     popSize = 200, pcrossover = 0.8, pmutation = 0.01, 
-                     elitism = max(1, round(popSize * 0.03)), maxiter = 1000, 
-                     run = 100)
+# Set bounds
+vec_bounds <- sf_bbox %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  mutate(grp = 1) %>% 
+  summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
+  unlist()
+# Set population size
+popSize <- 100
+
+# Create GA object
+obj_ga_station <- GA::ga(type = "real-valued", 
+                         lower = rep(x = c(vec_bounds["min_x"], vec_bounds["min_y"]), 
+                                     times = param_n_station) %>% unname(), 
+                         upper = rep(x = c(vec_bounds["max_x"], vec_bounds["max_y"]), 
+                                     times = param_n_station) %>% unname(), 
+                         fitness = fx_ga_fitness, 
+                         population = fx_ga_init_popn, 
+                         selection = fx_ga_select_popn, 
+                         crossover = function(...) fx_ga_crossover_popn(..., p_cross_subset = 0.5),
+                         mutation = function(...) fx_ga_mutate_popn(..., std_mutation_shift = 0.1, p_mutation_subset = 0.2),
+                         popSize = popSize, 
+                         pcrossover = 0.8, 
+                         pmutation = 0.01, 
+                         elitism = max(1, round(popSize * 0.03)), 
+                         maxiter = 3, 
+                         run = 100, 
+                         monitor = TRUE)
 
   
 
