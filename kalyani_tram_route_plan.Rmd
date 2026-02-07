@@ -585,31 +585,31 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
     select(-indiv_index) %>% 
     as.matrix()
 
-# Define function to calculate distances and popn served ---------------------
-fx_point_raster_dist <- function(sf_station_point){
-  # Calculate resident population served
-  popn_serve_station <- sf_station_point %>%
-    # Convert point to CRS object
-    st_sfc(crs = 4326) %>% 
-    # Convert to Spat Vector
-    terra::vect() %>% 
-    # Calculate distance matrix
-    terra::distance(x = rs_popn, y = .) %>% 
-    # Calculate population satisfied by each station, first calculate multiplier for each cell
-    tidyterra::mutate(popn = exp(-(popn^2)/(param_sd_sat_dist^2))) %>%
-    # Multiply with the actual population in each
-    `*`(rs_popn) %>%
-    # Calculate total sum
-    terra::global("sum", na.rm = TRUE) %>%
-    unlist(use.names = FALSE)
-
-  return(round(popn_serve_station))
-}
+# # Define function to calculate distances and popn served ---------------------
+# fx_point_raster_dist <- function(sf_station_point){
+#   # Calculate resident population served
+#   popn_serve_station <- sf_station_point %>%
+#     # Convert point to CRS object
+#     st_sfc(crs = 4326) %>% 
+#     # Convert to Spat Vector
+#     terra::vect() %>% 
+#     # Calculate distance matrix
+#     terra::distance(x = rs_popn, y = .) %>% 
+#     # Calculate population satisfied by each station, first calculate multiplier for each cell
+#     tidyterra::mutate(popn = exp(-(popn^2)/(param_sd_sat_dist^2))) %>%
+#     # Multiply with the actual population in each
+#     `*`(rs_popn) %>%
+#     # Calculate total sum
+#     terra::global("sum", na.rm = TRUE) %>%
+#     unlist(use.names = FALSE)
+# 
+#   return(round(popn_serve_station))
+# }
 
 # Define function to calculate population served by each station --------------------
 fx_ga_fitness <- function(vec_individual){
   # vec_individual <- mtx_popn_sample[1,]
-  print("Fitness calculation started ...")
+  # print("Fitness calculation started ...")
   
   # Create sf object 
   sf_indiv_stations <- vec_individual %>% 
@@ -669,7 +669,7 @@ fx_ga_fitness <- function(vec_individual){
     select(total_popn) %>% 
     sum()
   
-  print("Fitness calculation complete!")
+  # print("Fitness calculation complete!")
   
   return(sc_total_popn_served)
 }
@@ -677,7 +677,7 @@ fx_ga_fitness <- function(vec_individual){
 # Function for Population Initiation -------------------------
 fx_ga_init_popn <- function(obj_ga){
   # popn_size <- 200
-  print("Initial Population Generation started ...")
+  # print("Initial Population Generation started ...")
   # Create population matrix
   mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>%
   # mtx_popn <- tibble(indiv_index = 1:10) %>% 
@@ -700,14 +700,14 @@ fx_ga_init_popn <- function(obj_ga){
     select(-indiv_index) %>% 
     as.matrix()
   
-  print("Initial Population generated!")
+  # print("Initial Population generated!")
   
   return(mtx_popn)
 }
 
 # Function for Population Selection --------------------------
 fx_ga_select_popn <- function(obj_ga){
-  print("Population Selection process started ...")
+  # print("Population Selection process started ...")
   # Extract fitness value of current generation
   ga_curr_fitness <- obj_ga@fitness
   # Assign probabilities to each individual, proportional to the fitness value
@@ -720,7 +720,7 @@ fx_ga_select_popn <- function(obj_ga){
   mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
   vec_popn_fitness <- obj_ga@fitness[popn_sel]
   
-  print("Population Selection process complete!")
+  # print("Population Selection process complete!")
   
   return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
 }
@@ -730,7 +730,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
   # mtx_popn = mtx_popn_sample
   # parent_indices = matrix(data = c(1, 3), nrow = 2)
   # p_cross_subset = 0.5
-  print("Population Crossover operation started ...")
+  # print("Population Crossover operation started ...")
   # Extract population matrix from GA object
   mtx_popn <- obj_ga@population
   
@@ -786,7 +786,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
     # Convert to matrix
     as.matrix()
   
-  print("Population Crossover operation completed!")
+  # print("Population Crossover operation completed!")
   return(list(children = mtx_children,
               fitness = c(NA_real_, NA_real_)))
 }
@@ -797,7 +797,7 @@ fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutati
   # parent_index = c(2)
   # std_mutation_shift = 0.1
   # p_mutation_subset = 0.5
-  print("Population Mutation operation started ...")
+  # print("Population Mutation operation started ...")
   # Extract population matrix from GA object
   mtx_popn <- obj_ga@population
   # Define shifts in coordinates needed 
@@ -854,7 +854,7 @@ fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutati
     # Convert to vector
     unlist(use.names = FALSE)
     
-  print("Population Mutation operation completed!")
+  # print("Population Mutation operation completed!")
   return(vec_mutant)
 }
 
@@ -867,13 +867,15 @@ vec_bounds <- sf_bbox %>%
   summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
   unlist()
 # Set population size
-popSize <- 20
+popSize <- 100
 # Set system parameters
 param_n_station <- 30
 param_n_line <- 2
 param_sd_sat_dist <- 400
 
 # Create GA object
+t0 <- Sys.time()
+print(t0)
 obj_ga_station <- GA::ga(type = "real-valued", 
                          lower = rep(x = c(vec_bounds["min_x"], vec_bounds["min_y"]), 
                                      times = param_n_station) %>% unname(), 
@@ -882,15 +884,19 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          fitness = fx_ga_fitness, 
                          population = fx_ga_init_popn, 
                          selection = fx_ga_select_popn, 
-                         crossover = function(...) fx_ga_crossover_popn(..., p_cross_subset = 0.5),
-                         mutation = function(...) fx_ga_mutate_popn(..., std_mutation_shift = 0.1, p_mutation_subset = 0.2),
+                         crossover = function(...) fx_ga_crossover_popn(..., 
+                                                                        p_cross_subset = 0.5),
+                         mutation = function(...) fx_ga_mutate_popn(..., 
+                                                                    std_mutation_shift = 0.1, 
+                                                                    p_mutation_subset = 0.2),
                          popSize = popSize, 
-                         pcrossover = 0.8, 
-                         pmutation = 0.2, 
+                         pcrossover = 0.7, 
+                         pmutation = 0.01, 
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 100, 
-                         run = 100, 
+                         maxiter = 1000, 
+                         run = 50, 
                          monitor = TRUE)
+print(difftime(time1 = Sys.time, time2 = t0))
 
   
 
