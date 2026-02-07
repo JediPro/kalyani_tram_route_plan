@@ -434,6 +434,7 @@ yardstick::rsq_trad_vec(truth = mod_popn_lines$model$`log10(lines)`,
 ```{r Population and Topology}
 # Load libraries -------------------
 library(osmdata)
+library(sf)
 
 # Fetch city municipality limits -----------------------
 sf_city_limits <- st_read(dsn = "kalyani_wb_municipality_limits.kml") %>% 
@@ -604,12 +605,12 @@ fx_point_raster_dist <- function(sf_station_point){
 
 # Define function to calculate population served by each station --------------------
 fx_ga_fitness <- function(vec_individual){
-  # fgh <- mtx_popn[1,]
+  vec_individual <- mtx_popn_sample[1,]
   print("Fitness calculation started ...")
+  t0 <- Sys.time()
   # Create sf object 
   sf_indiv_stations <- vec_individual %>% 
     matrix(ncol = 2, byrow = TRUE) %>% 
-    as.data.frame() %>% 
     # Convert to tibble
     as_tibble() %>%
     rename(lon = V1, lat = V2) %>% 
@@ -651,7 +652,7 @@ fx_ga_fitness <- function(vec_individual){
     as_tibble() %>% 
     select(total_popn) %>% 
     sum()
-  
+  difftime(time1 = Sys.time(), time2 = t0)
   print("Fitness calculation complete!")
   
   return(sc_total_popn_served)
