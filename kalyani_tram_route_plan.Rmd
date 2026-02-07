@@ -485,6 +485,9 @@ rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif
 # Write to disk
 # terra::writeRaster(x = rs_popn, filename = "raster_city_popn.tif", overwrite = TRUE)
 
+# Convert raster to sf -----------------------------
+sf_popn <- rs_popn %>% terra::as.points() %>% st_as_sf()
+
 # # Load built up surface raster ------------------------------
 # # To be used as proxy for population, since is has higher resolution
 # rs_built <- terra::rast(x = "GHS_BUILT_S_E2018_GLOBE_R2023A_54009_10_V1_0_R7_C27.tif")  %>% 
@@ -605,9 +608,9 @@ fx_point_raster_dist <- function(sf_station_point){
 
 # Define function to calculate population served by each station --------------------
 fx_ga_fitness <- function(vec_individual){
-  vec_individual <- mtx_popn_sample[1,]
+  # vec_individual <- mtx_popn_sample[1,]
   print("Fitness calculation started ...")
-  t0 <- Sys.time()
+  
   # Create sf object 
   sf_indiv_stations <- vec_individual %>% 
     matrix(ncol = 2, byrow = TRUE) %>% 
@@ -636,14 +639,27 @@ fx_ga_fitness <- function(vec_individual){
     # Round figure
     mutate(generator_popn_served = round(generator_popn_served))
   
-  # Calculate share of resident population served by stations
-  data_station_popn_served <- sf_indiv_stations %>% 
-    # Apply function
-    mutate(popn_served = map_dbl(.x = geometry, 
-                                 .f = fx_point_raster_dist, .progress = TRUE)) %>% 
+  # Calculate resident population served
+  data_station_popn_served <-  sf_indiv_stations %>% 
+    # Calculate distance to all points in raster sf
+    st_distance(y = sf_popn, by_element = FALSE) %>% 
+    # Convert to matrix
+    as.matrix() %>% 
+    # Drop units due to matrix operations being hampered when sf is loaded
+    units::drop_units() %>% 
+    # Calculate multiplier for demand based on distance
+    (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
+    # Multiply by demand generated  by each point
+    `%*%` (sf_popn$popn) %>% 
+    as.data.frame() %>% 
+    # Convert to tibble
+    as_tibble() %>% 
+    rename(popn_served = V1) %>% 
+    # Round figure
+    mutate(popn_served = round(popn_served)) %>% 
     # Map Point generator fields
     bind_cols(data_station_point_served)
-  
+
   # Calculate total popn served
   sc_total_popn_served <- data_station_popn_served %>% 
     # Add up both types of popn served for each station
@@ -652,7 +668,7 @@ fx_ga_fitness <- function(vec_individual){
     as_tibble() %>% 
     select(total_popn) %>% 
     sum()
-  difftime(time1 = Sys.time(), time2 = t0)
+  
   print("Fitness calculation complete!")
   
   return(sc_total_popn_served)
