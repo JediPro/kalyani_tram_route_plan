@@ -858,6 +858,16 @@ fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutati
   return(vec_mutant)
 }
 
+# Function to store population and fitness at each iteration ----------------
+fx_ga_save_popn <- function(obj_ga){
+  # Update global list
+  assign(x = "global_popn_fitness", 
+         value = list(popn = obj_ga@population, fitness = obj_ga@fitness), 
+         envir = globalenv())
+  
+  return(obj_ga)
+}
+
 # Create GA function ------------------------------------------
 # Set bounds
 vec_bounds <- sf_bbox %>% 
@@ -872,6 +882,8 @@ popSize <- 100
 param_n_station <- 30
 param_n_line <- 2
 param_sd_sat_dist <- 400
+# Define list to store population matrix and fitness vectors
+global_popn_fitness <- list(popn = NULL, fitness = NULL)
 
 # Create GA object
 t0 <- Sys.time()
@@ -893,7 +905,8 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          pcrossover = 0.7, 
                          pmutation = 0.01, 
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 1000, 
+                         maxiter = 400,
+                         postFitness = fx_ga_save_popn,
                          run = 50, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time, time2 = t0))
