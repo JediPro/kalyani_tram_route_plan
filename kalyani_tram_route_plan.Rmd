@@ -571,27 +571,6 @@ sf_demand_point <- tribble(
 # Stations - 30 | 45
 # Lines - 2 | 3
 
-# Define sample matrix for functions ---------------------
-mtx_popn_sample <- tibble(indiv_index = 1:10) %>% 
-    # Create sf vector of sample points for each individual
-    mutate(sf_sample = map(.x = indiv_index, .f = function(x){
-      # Generate samples for eaqch individual
-      st_sample(x = sf_city_limits, size = param_n_station) %>% 
-        # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
-        st_coordinates() %>% t() %>% as.vector()
-    }, .progress = TRUE)) %>% 
-    # Remove list column
-    unnest(cols = sf_sample) %>% 
-    # Assign column names
-    group_by(indiv_index) %>% 
-    mutate(col_name = row_number()) %>% 
-    ungroup() %>% 
-    # Wide form
-    pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>% 
-    # Convert to matrix
-    select(-indiv_index) %>% 
-    as.matrix()
-
 # # Define function to calculate distances and popn served ---------------------
 # fx_point_raster_dist <- function(sf_station_point){
 #   # Calculate resident population served
@@ -891,6 +870,27 @@ param_n_line <- 2
 param_sd_sat_dist <- 400
 # Define list to store population matrix and fitness vectors
 global_popn_fitness <- list(popn = NULL, fitness = NULL)
+
+# Define sample matrix for functions ---------------------
+mtx_popn_sample <- tibble(indiv_index = 1:10) %>% 
+    # Create sf vector of sample points for each individual
+    mutate(sf_sample = map(.x = indiv_index, .f = function(x){
+      # Generate samples for each individual
+      st_sample(x = sf_city_limits, size = param_n_station) %>% 
+        # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
+        st_coordinates() %>% t() %>% as.vector()
+    }, .progress = TRUE)) %>% 
+    # Remove list column
+    unnest(cols = sf_sample) %>% 
+    # Assign column names
+    group_by(indiv_index) %>% 
+    mutate(col_name = row_number()) %>% 
+    ungroup() %>% 
+    # Wide form
+    pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>% 
+    # Convert to matrix
+    select(-indiv_index) %>% 
+    as.matrix()
 
 # Create GA object
 t0 <- Sys.time()
