@@ -17,6 +17,9 @@ library(tidyverse)
 
 # Set working directory
 setwd("C:\\Stuff\\Datasets\\GitHub\\kalyani_tram_route_plan\\")
+
+# Load themes script
+source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
 ```
 
 ## Existing Tram Networks
@@ -132,21 +135,20 @@ table_metro_systems <- read_html("https://en.wikipedia.org/wiki/List_of_metro_sy
                 .fns = ~str_extract(string = .x, pattern = "\\d.*") %>% as.integer()),
          length = str_extract(string = length, pattern = "(.*)[\\h]km", group = 1) %>% as.numeric(),
          # Recode city
-         city = case_match(.x = city, 
+         city = replace_values(x = city, 
                            "Washington" ~ "Washington DC",
                            "San Francisco (Bay Area)" ~ "San Francisco",
                            "Taipei" ~ "New Taipei",
-                           "Copenhagen" ~ "Greater Copenhagen",
-                           .default = city),
+                           "Copenhagen" ~ "Greater Copenhagen"),
          # Convert to upper
          across(c(city, country), toupper))
 
 # Download world cities database from simplemaps to map ascii names to unicode names --------------------
 table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>% 
   # Recode country names that do not match Popn table
-  mutate(country = case_match(.x = country, "Korea, North" ~ "North Korea",
-                              "Czechia" ~ "Czech Republic",
-                              .default = country),
+  mutate(country = replace_values(x = country, 
+                                  "Korea, North" ~ "North Korea",
+                                  "Czechia" ~ "Czech Republic"),
          city_ascii = case_when(city_ascii == "Washington" & admin_name == "District of Columbia" ~ "Washington DC",
                                 TRUE ~ city_ascii),
          city = case_when(city == "Washington" & admin_name == "District of Columbia" ~ "Washington DC",
@@ -157,7 +159,7 @@ table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>%
   group_by(city_ascii, country) %>% 
   slice_max(order_by = population, n = 1) %>% ungroup() %>% 
   # Recode city names
-  mutate(city_ascii = case_match(.x = city_ascii,
+  mutate(city_ascii = replace_values(x = city_ascii,
                                  "AR RAYYAN" ~ "AL RAYYAN",
                                 "BRANDENBURG" ~ "BRANDENBURG AN DER HAVEL",
                                 "CH'ONGJIN" ~ "CHONGJIN",
@@ -194,8 +196,7 @@ table_city_name <- readxl::read_xlsx(path = "worldcities.xlsx") %>%
                                 "USOL'YE-SIBIRSKOYE" ~ "USOLYE-SIBIRSKOYE",
                                 "VITSYEBSK" ~ "VITEBSK",
                                 "YEVPATORIIA" ~ "YEVPATORIA",
-                                "KOCAELI" ~ "İZMIT", 
-                                .default = city_ascii
+                                "KOCAELI" ~ "İZMIT"
 ))
 
 # Create table combining system and population information -----------------------
@@ -218,7 +219,7 @@ data_lrt_pop <- table_lrt_systems %>%
   # Consider overlap in population columns
   mutate(popn = case_when(is.na(popn_1) ~ popn_2, TRUE ~ popn_1),
          # Fill in populations for missing cities manually
-         popn = case_match(.x = city,
+         popn = recode_values(x = city,
                            "BAD SCHANDAU" ~ 3409,
                           "BELGIAN COAST" ~ 219488,
                           "CHERYOMUSHKI" ~ 10000,
@@ -233,7 +234,7 @@ data_lrt_pop <- table_lrt_systems %>%
                           "TIANSHUI" ~ 1212791,
                           "VOLCHANSK" ~ 8000,
                           "VOLZHSKY" ~ 321427,
-                          .default = popn)) %>% 
+                          default = popn)) %>% 
   # Remove helper columns
   select(-popn_1, -popn_2) %>% 
   # Replace 0 in stations and lines with NA
@@ -267,6 +268,7 @@ plot_length_stations
 # Model Length vs Stations
 mod_length_stations <- lm(formula = log10(stations) ~ log10(length), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_length_stations
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_length_stations$model$`log10(stations)`, 
                         estimate = mod_length_stations$fitted.values)
@@ -297,6 +299,7 @@ plot_length_lines
 # Model Length vs Stations
 mod_length_lines <- lm(formula = log10(lines) ~ log10(length), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_length_lines
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_length_lines$model$`log10(lines)`, 
                         estimate = mod_length_lines$fitted.values)
@@ -327,6 +330,7 @@ plot_lines_stations
 # Model Length vs Stations
 mod_lines_stations <- lm(formula = log10(stations) ~ log10(lines), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_lines_stations
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_lines_stations$model$`log10(stations)`, 
                         estimate = mod_lines_stations$fitted.values)
@@ -348,7 +352,7 @@ plot_popn_length <- data_lrt_pop %>%
   geom_vline(mapping = aes(xintercept = 1.5e+5), colour = "white", alpha = 0.7, linetype = "dashed") +
   # Scales
   scale_x_continuous(name = "Population", 
-                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     labels = scales::label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
   scale_y_continuous(name = "Route Length (km)", 
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
@@ -360,6 +364,7 @@ plot_popn_length
 # Model Length vs Stations
 mod_popn_length <- lm(formula = log10(length) ~ log10(popn), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_popn_length
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_popn_length$model$`log10(length)`, 
                         estimate = mod_popn_length$fitted.values)
@@ -380,7 +385,7 @@ plot_popn_stations <- data_lrt_pop %>%
               method = "lm") +
   # Scales
   scale_x_continuous(name = "Population", 
-                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     labels = scales::label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
   scale_y_continuous(name = "Stations", 
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
@@ -392,6 +397,7 @@ plot_popn_stations
 # Model stations vs Stations
 mod_popn_stations <- lm(formula = log10(stations) ~ log10(popn), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_popn_stations
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_popn_stations$model$`log10(stations)`, 
                         estimate = mod_popn_stations$fitted.values)
@@ -411,7 +417,7 @@ plot_popn_lines <- data_lrt_pop %>%
               method = "lm") +
   # Scales
   scale_x_continuous(name = "Population", 
-                     labels = label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
+                     labels = scales::label_comma(scale = 1e-5, suffix = "L", accuracy = 0.1),
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
   scale_y_continuous(name = "Lines", 
                      expand = expansion(mult = c(0.01, 0.01)), trans = "log10") +
@@ -423,6 +429,7 @@ plot_popn_lines
 # Model lines vs lines
 mod_popn_lines <- lm(formula = log10(lines) ~ log10(popn), 
                           data = data_lrt_pop, na.action = na.omit)
+mod_popn_lines
 # R-squared
 yardstick::rsq_trad_vec(truth = mod_popn_lines$model$`log10(lines)`, 
                         estimate = mod_popn_lines$fitted.values)
