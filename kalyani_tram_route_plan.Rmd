@@ -910,12 +910,9 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          run = 50, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time, time2 = t0))
-
-  
-
-
-
-
 ```
 
+```{r Generalize for othe towns}
+# Pick town
+```
 
