@@ -544,6 +544,9 @@ sf_demand_point <- tribble(
   # Convert to sf
   st_as_sf(coords = c("lon", "lat"), crs = st_crs(sf_bbox))
 
+# Store total population to serve --------------------------
+sc_total_demand <- sum(sf_popn$popn) + sum(sf_demand_point$demand)
+
 # ggplot() +
 #   tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
 #   tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
@@ -614,12 +617,15 @@ fx_ga_fitness <- function(vec_individual){
     units::drop_units() %>% 
     # Calculate multiplier for demand based on distance
     (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
-    # Multiply by demand generated  by each point
-    `%*%` (sf_demand_point$demand) %>% 
-    as.data.frame() %>% 
+    # Multiply each with the corresponding demand
+    sweep(MARGIN = 2, sf_demand_point$demand, `*`) %>%
+    # Round out the values to floor integer to ensure only whole individuals are counted
+    # `%*%` (sf_demand_point$demand) %>% 
+    {floor(.)} %>% 
+    # Sum up demand handled by each station
+    rowSums() %>% 
     # Convert to tibble
-    as_tibble() %>% 
-    rename(generator_popn_served = V1) %>% 
+    tibble(generator_popn_served = .) %>% 
     # Round figure
     mutate(generator_popn_served = round(generator_popn_served))
   
@@ -633,6 +639,8 @@ fx_ga_fitness <- function(vec_individual){
     units::drop_units() %>% 
     # Calculate multiplier for demand based on distance
     (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
+    # Normalize so that each column sums up to 1, ensures popn is fully divided
+    sweep(2, colSums(.), `/`) %>% 
     # Multiply by demand generated  by each point
     `%*%` (sf_popn$popn) %>% 
     as.data.frame() %>% 
@@ -651,7 +659,9 @@ fx_ga_fitness <- function(vec_individual){
     # Sum up to get total popn
     as_tibble() %>% 
     select(total_popn) %>% 
-    sum()
+    sum()/sc_total_popn_served
+    # Scale to total popn
+    `%/%` (sc_total_demand)
   
   # print("Fitness calculation complete!")
   
