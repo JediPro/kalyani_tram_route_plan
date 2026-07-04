@@ -23,7 +23,6 @@ source(file = "C:\\Stuff\\Datasets\\vaw_themes.R")
 ```
 
 ## Existing Tram Networks
-
 ```{r Existing Tram Networks}
 # Load packages ----------------------
 library(rvest)
@@ -242,7 +241,6 @@ data_lrt_pop <- table_lrt_systems %>%
 ```
 
 ## Visualize relations between route characteristics and city population
-
 ```{r Routes vs Population}
 # Length vs Stations --------------------------------
 # Plot
