@@ -870,7 +870,7 @@ vec_bounds <- sf_bbox %>%
   summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
   unlist()
 # Set population size
-popSize <- 100
+popSize <- 200
 # Set system parameters
 param_n_station <- 30
 param_n_line <- 2
@@ -919,7 +919,7 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          pcrossover = 0.7, 
                          pmutation = 0.01, 
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 50,
+                         maxiter = 200,
                          # postFitness = fx_ga_save_popn,
                          run = 50, 
                          monitor = TRUE)
