@@ -924,6 +924,8 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          run = 50, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
+# Save to disk
+write_rds(x = obj_ga_station, file = "obj_ga_station.rds")
 ```
 
 ```{r Generalize for othe towns}
