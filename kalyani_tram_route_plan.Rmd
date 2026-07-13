@@ -615,37 +615,39 @@ fx_ga_fitness <- function(vec_individual){
     as.matrix() %>% 
     # Drop units due to matrix operations being hampered when sf is loaded
     units::drop_units() %>% 
-    # Calculate multiplier for demand based on distance
-    (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
-    # # Normalize by column sums
-    # sweep(MARGIN = 2, STATS = colSums(.), FUN = `/`) %>% 
+    # Only keep values below threshold, defined by parameter
+    (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+    # Flag the closest station for each demand point
+    apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+    # Keep only 1s
+    (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
     # Multiply each with the corresponding demand
     sweep(MARGIN = 2, sf_demand_point$demand, `*`) %>%
-    # Round out the values to floor integer to ensure only whole individuals are counted
-    # `%*%` (sf_demand_point$demand) %>% 
-    {floor(.)} %>% 
     # Sum up demand handled by each station
-    rowSums() %>% 
+    rowSums(na.rm = TRUE) %>% 
     # Convert to tibble
     tibble(generator_popn_served = .)
   
   # Calculate resident population served
-  data_station_popn_served <-  sf_indiv_stations %>% 
+  data_station_popn_served <- sf_indiv_stations %>% 
     # Calculate distance to all points in raster sf
     st_distance(y = sf_popn, by_element = FALSE) %>% 
     # Convert to matrix
     as.matrix() %>% 
     # Drop units due to matrix operations being hampered when sf is loaded
     units::drop_units() %>% 
-    # Calculate multiplier for demand based on distance
-    (function(a) exp(-(a^2)/(param_sd_sat_dist^2))) %>%
-    # Multiply each with the corresponding population
+    # Only keep values below threshold, defined by parameter
+    (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+    # Flag the closest station for each popn point
+    apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+    # Keep only 1s
+    (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+    # Multiply each with the corresponding demand
     sweep(MARGIN = 2, sf_popn$popn, `*`) %>%
-    # Round out the values to floor integer to ensure only whole individuals are counted
-    # `%*%` (sf_demand_point$demand) %>% 
+    # ROund down to integer
     {floor(.)} %>% 
     # Sum up demand handled by each station
-    rowSums() %>% 
+    rowSums(na.rm = TRUE) %>% 
     # Convert to tibble
     tibble(popn_served = .) %>% 
     # Map Point generator fields
@@ -874,30 +876,30 @@ popSize <- 200
 # Set system parameters
 param_n_station <- 30
 param_n_line <- 2
-param_sd_sat_dist <- 400
+param_sd_sat_dist <- 600
 # Define list to store population matrix and fitness vectors
 global_popn_fitness <- list(popn = NULL, fitness = NULL)
 
 # Define sample matrix for functions ---------------------
-# mtx_popn_sample <- tibble(indiv_index = 1:10) %>% 
-#     # Create sf vector of sample points for each individual
-#     mutate(sf_sample = map(.x = indiv_index, .f = function(x){
-#       # Generate samples for each individual
-#       st_sample(x = sf_city_limits, size = 10) %>% 
-#         # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
-#         st_coordinates() %>% t() %>% as.vector()
-#     }, .progress = TRUE)) %>% 
-#     # Remove list column
-#     unnest(cols = sf_sample) %>% 
-#     # Assign column names
-#     group_by(indiv_index) %>% 
-#     mutate(col_name = row_number()) %>% 
-#     ungroup() %>% 
-#     # Wide form
-#     pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>% 
-#     # Convert to matrix
-#     select(-indiv_index) %>% 
-#     as.matrix()
+mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
+    # Create sf vector of sample points for each individual
+    mutate(sf_sample = map(.x = indiv_index, .f = function(x){
+      # Generate samples for each individual
+      st_sample(x = sf_city_limits, size = 10) %>%
+        # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
+        st_coordinates() %>% t() %>% as.vector()
+    }, .progress = TRUE)) %>%
+    # Remove list column
+    unnest(cols = sf_sample) %>%
+    # Assign column names
+    group_by(indiv_index) %>%
+    mutate(col_name = row_number()) %>%
+    ungroup() %>%
+    # Wide form
+    pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>%
+    # Convert to matrix
+    select(-indiv_index) %>%
+    as.matrix()
 
 # Create GA object
 t0 <- Sys.time()
@@ -916,10 +918,10 @@ obj_ga_station <- GA::ga(type = "real-valued",
                                                                     std_mutation_shift = 0.1, 
                                                                     p_mutation_subset = 0.2),
                          popSize = popSize, 
-                         pcrossover = 0.7, 
-                         pmutation = 0.01, 
+                         pcrossover = 0.7,
+                         pmutation = 0.03,
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 200,
+                         maxiter = 400,
                          # postFitness = fx_ga_save_popn,
                          run = 50, 
                          monitor = TRUE)
@@ -927,6 +929,39 @@ print(difftime(time1 = Sys.time(), time2 = t0))
 # Save to disk
 write_rds(x = obj_ga_station, file = "obj_ga_station.rds")
 ```
+
+```{r Visualize Best Solution}
+# Load solution GA object for stations ----------------------------
+obj_ga_station <- read_rds(file = "obj_ga_station.rds")
+
+# Create sf object of station locations -------------------
+sf_soln_stations <- obj_ga_station@solution %>% 
+    matrix(ncol = 2, byrow = TRUE) %>% 
+    # Convert to tibble
+    as_tibble(.name_repair = "unique_quiet") %>%
+    rename(lon = 1, lat = 2) %>% 
+    # Convert to sf
+    st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+ggplot() +
+  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  # tidyterra::geom_spatraster(data = rs_popn_station, aes(fill = popn)) +
+  geom_sf(data = sf_city_road) +
+  geom_sf(data = sf_demand_point, size = 2, colour = "red") +
+  # geom_sf(data = sf_indiv_stations, size = 4, colour = "hotpink") +
+  geom_sf(data = sf_soln_stations, size = 4, colour = "hotpink") +
+  scale_fill_viridis_b(name = "Population", na.value = "transparent") +
+  theme_vaw_light() +
+  theme(panel.grid.major = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        legend.key.height = unit(7, "mm"),
+        legend.position = "inside",
+        legend.direction = "vertical",
+        legend.position.inside = c(0.9, 0.5))
+```
+
+
 
 ```{r Generalize for othe towns}
 # Pick town
