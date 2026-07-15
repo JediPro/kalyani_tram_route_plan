@@ -553,7 +553,7 @@ sc_total_demand <- sum(sf_popn$popn) + sum(sf_demand_point$demand)
 #   scale_fill_viridis_b()
 ```
 
-## Workflow
+## Workflow for Station Locations
 - Get road network
 - Fetch population raster
 - Define Point Generators of demand
@@ -919,7 +919,7 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          pcrossover = 0.7,
                          pmutation = 0.03,
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 1000,
+                         maxiter = 200,
                          # postFitness = fx_ga_save_popn,
                          run = 30, 
                          monitor = TRUE)
@@ -960,6 +960,7 @@ plot_soln_stations <- ggplot() +
         legend.position.inside = c(0.9, 0.5))
 
 # Plot trend of fit --------------------------------
+# Convergence happens in 200 iterations
 obj_ga_station@summary %>% 
   as_tibble() %>% 
   mutate(iter = row_number()) %>% 
@@ -974,9 +975,13 @@ obj_ga_station@summary %>%
   theme_vaw_light()
 ```
 
+## Workflow for Line Layouts
+- Create network graph for current individual
+- Calculate total length of network, assuming straight line distance between stations
+- Calculate total distance between each pair of stations according to network graph
+- Optimize for product of both costs
 
+```{r Objective Fynction for Lines}
 
-```{r Generalize for othe towns}
-# Pick town
 ```
 
