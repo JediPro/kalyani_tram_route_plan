@@ -14,6 +14,8 @@ options(warn = 1)
 ```{r Set environment}
 # Load libraries
 library(tidyverse)
+library(osmdata)
+library(sf)
 
 # Set working directory
 setwd("C:\\Stuff\\Datasets\\GitHub\\kalyani_tram_route_plan\\")
@@ -437,10 +439,6 @@ yardstick::rsq_trad_vec(truth = mod_popn_lines$model$`log10(lines)`,
 
 ## Get Population and Topographical Features
 ```{r Population and Topology}
-# Load libraries -------------------
-library(osmdata)
-library(sf)
-
 # Fetch city municipality limits -----------------------
 sf_city_limits <- st_read(dsn = "kalyani_wb_municipality_limits.kml") %>% 
   st_zm()
