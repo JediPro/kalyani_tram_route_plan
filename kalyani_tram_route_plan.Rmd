@@ -1033,5 +1033,6 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
   # Combine line station vectors into one vector
   pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id)
 
+# Define fitness function -----------------------------
 ```
 
