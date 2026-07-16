@@ -873,7 +873,6 @@ vec_bounds <- sf_bbox %>%
 popSize <- 200
 # Set system parameters
 param_n_station <- 20
-param_n_line <- 2
 param_sd_sat_dist <- 600
 # Define list to store population matrix and fitness vectors
 global_popn_fitness <- list(popn = NULL, fitness = NULL)
@@ -982,6 +981,57 @@ obj_ga_station@summary %>%
 - Optimize for product of both costs
 
 ```{r Objective Fynction for Lines}
+# Load Station Solution ---------------------------------
+obj_ga_station <- read_rds(file = "obj_ga_station.rds")
+
+# Create sf object of station locations -------------------
+sf_soln_stations <- obj_ga_station@solution[1,] %>% 
+  matrix(ncol = 2, byrow = TRUE) %>% 
+  # Convert to tibble
+  as_tibble(.name_repair = "unique_quiet") %>%
+  rename(lon = 1, lat = 2) %>% 
+  # Convert to sf
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  # Set index of stations
+  mutate(id = row_number())
+
+# Set number of lines --------------------
+param_n_line <- 2
+
+# Create initial population -----------------------
+mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
+  # Create duplicate rows for each line within each individual
+  mutate(line = list(c(1:param_n_line))) %>% 
+  unnest_longer(col = line) %>% 
+  # Sample randomly selected number of points for each line from station indices
+  # First set number of points to fetch for each line
+  mutate(num_station = map_int(.x = line, 
+                               .f = function(x) {
+                                 sample(x = 2:max(sf_soln_stations$id), 
+                                        size = 1, replace = FALSE)},
+                               .progress = TRUE),
+         # Next, fetch list of station indices
+         station_id = map(.x = num_station, 
+                          .f = function(x) {
+                            # Define vector of stations
+                            vec_station <- sample(x = sf_soln_stations$id, 
+                                                  size = x, replace = FALSE)
+                            # Create vector of 0s with length equal to length of pad
+                            vec_zero <- rep(0, max(sf_soln_stations$id) - x)
+                            # Return final padded vector
+                            return(c(vec_station, vec_zero))
+                            }, 
+                          .progress = TRUE)) %>% 
+  # Unnest column
+  unnest_longer(col = station_id) %>% 
+  # Remove unwanted column
+  select(-c(line, num_station)) %>% 
+  # Assign column names
+  group_by(indiv_index) %>%
+  mutate(col_name = row_number()) %>%
+  ungroup() %>%
+  # Combine line station vectors into one vector
+  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id)
 
 ```
 
