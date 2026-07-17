@@ -998,34 +998,53 @@ sf_soln_stations <- obj_ga_station@solution[1,] %>%
 # Set number of lines --------------------
 param_n_line <- 2
 
+# Function to create line topology, ensuring a station belongs to atleast one line
+fx_generate_line_layout <- function(){
+  # Create table
+  table_stations <- tibble(id = 1:max(sf_soln_stations$id)) %>% 
+    mutate(line_id = case_when(id %in% sample(x = 2:max(sf_soln_stations$id), 
+                                            size = param_n_line - 1, replace = FALSE) ~ 1, 
+                             TRUE ~ 0),
+           line_id = cumsum(line_id) + 1,
+           # Shuffle ids
+           id = sample(id)) %>% 
+    # Nest
+    nest(id = id) %>% 
+    # Set number of stations per line
+    mutate(num_station = sample(x = 2:max(sf_soln_stations$id), 
+                                size = nrow(.), replace = TRUE),
+           # Add more stations to line if num stations is lower than selected
+           station_id = map2(.x = id, .y = num_station, 
+                             .f = function(x,y){
+                               # Extract current set of stations
+                               curr_vec <- x[[1]]
+                               # Create vector for remaining set of station
+                               remain_vec <- setdiff(1:max(sf_soln_stations$id), curr_vec)
+                               extra_vec <- sample(x = remain_vec, 
+                                                   size = min(max(y - length(curr_vec), 0), 
+                                                              length(remain_vec)))
+                               # Shuffle vector
+                               append_vec <- sample(c(curr_vec, extra_vec))
+                               # Pad tp length of number of stations with 0
+                               vec_zero <- rep(0, max(sf_soln_stations$id) - length(append_vec))
+                              # Return final padded vector
+                              return(c(append_vec, vec_zero))
+                             })) %>% 
+    # Select columns
+    select(line_id, station_id) %>% 
+    unnest_longer(col = station_id)
+  
+  return(table_stations)
+}
+
 # Create initial population -----------------------
 mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
-  # Create duplicate rows for each line within each individual
-  mutate(line = list(c(1:param_n_line))) %>% 
-  unnest_longer(col = line) %>% 
-  # Sample randomly selected number of points for each line from station indices
-  # First set number of points to fetch for each line
-  mutate(num_station = map_int(.x = line, 
-                               .f = function(x) {
-                                 sample(x = 2:max(sf_soln_stations$id), 
-                                        size = 1, replace = FALSE)},
-                               .progress = TRUE),
-         # Next, fetch list of station indices
-         station_id = map(.x = num_station, 
-                          .f = function(x) {
-                            # Define vector of stations
-                            vec_station <- sample(x = sf_soln_stations$id, 
-                                                  size = x, replace = FALSE)
-                            # Create vector of 0s with length equal to length of pad
-                            vec_zero <- rep(0, max(sf_soln_stations$id) - x)
-                            # Return final padded vector
-                            return(c(vec_station, vec_zero))
-                            }, 
-                          .progress = TRUE)) %>% 
-  # Unnest column
-  unnest_longer(col = station_id) %>% 
+  # Create individual line layouts
+  mutate(line = map(.x = indiv_index, 
+                    .f = function(x){fx_generate_line_layout()})) %>% 
+  unnest(cols = line) %>% 
   # Remove unwanted column
-  select(-c(line, num_station)) %>% 
+  select(-c(line_id)) %>% 
   # Assign column names
   group_by(indiv_index) %>%
   mutate(col_name = row_number()) %>%
