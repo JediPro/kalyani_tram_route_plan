@@ -16,6 +16,7 @@ options(warn = 1)
 library(tidyverse)
 library(osmdata)
 library(sf)
+library(sfnetworks)
 
 # Set working directory
 setwd("C:\\Stuff\\Datasets\\GitHub\\kalyani_tram_route_plan\\")
@@ -995,11 +996,128 @@ sf_soln_stations <- obj_ga_station@solution[1,] %>%
   # Set index of stations
   mutate(id = row_number())
 
-# Set number of lines --------------------
+# Set parameters --------------------
+param_sd_sat_dist <- 600
 param_n_line <- 2
 param_n_station <- max(sf_soln_stations$id)
+param_travel_speed <- 7 # In metres/sec
 
-# Function to create line topology, ensuring a station belongs to atleast one line
+# Calculate population served for each station -----------------------
+data_station_point_served <- sf_soln_stations %>% 
+  # Calculate distance to each point point generator
+  st_distance(y = sf_demand_point, by_element = FALSE) %>% 
+  # Convert to matrix
+  as.matrix() %>% 
+  # Drop units due to matrix operations being hampered when sf is loaded
+  units::drop_units() %>% 
+  # Only keep values below threshold, defined by parameter
+  (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+  # Flag the closest station for each demand point
+  apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+  # Keep only 1s
+  (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+  # Multiply each with the corresponding demand
+  sweep(MARGIN = 2, sf_demand_point$demand, `*`) %>%
+  # Sum up demand handled by each station
+  rowSums(na.rm = TRUE) %>% 
+  # Convert to tibble
+  tibble(generator_popn_served = .)
+
+# Calculate resident population served -----------------------
+data_station_popn_served <- sf_soln_stations %>% 
+  # Calculate distance to all points in raster sf
+  st_distance(y = sf_popn, by_element = FALSE) %>% 
+  # Convert to matrix
+  as.matrix() %>% 
+  # Drop units due to matrix operations being hampered when sf is loaded
+  units::drop_units() %>% 
+  # Only keep values below threshold, defined by parameter
+  (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+  # Flag the closest station for each popn point
+  apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+  # Keep only 1s
+  (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+  # Multiply each with the corresponding demand
+  sweep(MARGIN = 2, sf_popn$popn, `*`) %>%
+  # Round down to integer
+  {floor(.)} %>% 
+  # Sum up demand handled by each station
+  rowSums(na.rm = TRUE) %>% 
+  # Convert to tibble
+  tibble(popn_served = .) %>% 
+  # Map Point generator fields
+  bind_cols(data_station_point_served) %>% 
+  # Set station Ids
+  mutate(station_id = row_number(),
+         total_demand = popn_served + generator_popn_served) %>% 
+  select(station_id, total_demand)
+
+# Calculate origin destination demand matrix for all pairs of stations -----------------------
+mtx_init_od <- data_station_popn_served %>% 
+  # Create 1 row for each combination of pairs of stations
+  cross_join(x = ., y = ., suffix = c("_org", "_des")) %>% 
+  # Replace the demand value for same pair of stations with 0
+  group_by(station_id_org) %>% 
+  mutate(total_demand_des = case_when(station_id_org == station_id_des ~ 0, 
+                                    TRUE ~ total_demand_des),
+         # Replace by share of demand
+         total_demand_des = total_demand_des/sum(total_demand_des),
+         # Multiply with demand originating from station to each dest station
+         total_demand_des = total_demand_des * total_demand_org) %>% 
+  ungroup() %>% 
+  select(station_id_org, station_id_des, total_demand_des) %>% 
+  # Wide form
+  pivot_wider(id_cols = station_id_org, names_from = station_id_des, 
+              values_from = total_demand_des) %>% 
+  # Stores as matrix
+  select(-station_id_org) %>% 
+  as.matrix()
+
+# Create vector to store current origin demand -----------------------
+vec_origin <- data_station_popn_served %>% 
+  arrange(station_id) %>% 
+  `$`(total_demand)
+
+# Use Furness method to stabilize the OD matrix -----------------------
+# which happens when origins from each station matches destinations
+# Set params
+curr_iter <- 0
+flag_converge <- FALSE
+mtx_od <- mtx_init_od
+
+# Start loop
+while(!flag_converge & curr_iter < 100){
+  
+  # Update counter
+  curr_iter <- curr_iter + 1
+  # Store current matrix
+  mtx_old <- mtx_od
+  
+  # First balance the rows
+  row_sums <- rowSums(mtx_od)
+  # Where sum is zero, replace by 1
+  row_sums[row_sums == 0] <- 1
+  # Calculate multiplication factor
+  row_factors <- vec_origin / row_sums
+  # MUltiply by factor to scale
+  mtx_od <- mtx_od * row_factors
+  
+  # Next, scale columns
+  col_sums <- colSums(mtx_od)
+  col_sums[col_sums == 0] <- 1
+  col_factors <- vec_origin / col_sums
+  mtx_od <- t(t(mtx_od) * col_factors)
+  
+  # Finally, check convergence
+  max_diff <- max(abs(mtx_od - mtx_old))
+  print(paste0("Current Iteration: ", curr_iter, " | Current Diff: ", round(max_diff)))
+  if (max_diff < 1) flag_converge <- TRUE
+}
+
+# Round off matrix
+mtx_od <- round(mtx_od)
+
+# Function to create line topology, ensuring a station belongs to atleast one line ----------------------
 fx_generate_line_layout <- function(){
   # Create table
   table_stations <- tibble(id = 1:max(sf_soln_stations$id)) %>% 
@@ -1056,11 +1174,11 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
   select(-indiv_index) %>% 
   as.matrix()
 
-# Function to check connectedness and calculate fitness function ---------------
-vec_individual <- mtx_popn_sample[6,]
+# Function to check connectedness and calculate fitness function
+vec_individual <- mtx_popn_sample[10,]
 
-# Create line string representations of each line ------------------
-fgh <- vec_individual %>% 
+# Create line string representations of each line
+sfnet_individual <- vec_individual %>% 
   # Store as tibble
   tibble(station_id = .) %>% 
   # Assign row numbers
@@ -1071,12 +1189,52 @@ fgh <- vec_individual %>%
   left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
   st_as_sf(crs = 4326) %>% 
   select(-station_id) %>% 
-  # Create linestrings
+  # Create line segments between each point and next, grouped by line
   group_by(line_id) %>% 
-  summarise(do_union = FALSE) %>% 
-  st_cast(to = "LINESTRING")
+  mutate(next_point = lead(geometry)) %>% 
+  ungroup() %>% 
+  # Remove row where next point is NA
+  filter(!st_is_empty(next_point)) %>% 
+  rowwise() %>% 
+  mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+  st_cast(to = "LINESTRING") %>% 
+  # Remove helper
+  select(-next_point) %>% 
+  # Convert to sf network object
+  as_sfnetwork(directed = FALSE) %>% 
+  # Fetch Station IDs, since sfnetwork shuffles order
+  activate(nodes) %>% 
+  st_join(y = sf_soln_stations) %>% 
+  arrange(id)
 
-ggplot(fgh) + geom_sf(aes(colour = as.character(line_id)))
+# Check if network is connected
+sc_connected <- igraph::is_connected(sfnet_individual, mode = "weak")
+
+# Calculate total length of network
+sc_net_length <- sfnet_individual %>% 
+  # Extract edges
+  st_as_sf("edges") %>% 
+  # Find length of each segment
+  st_length() %>% 
+  sum() %>% 
+  as.numeric()
+
+# Calculate total length from each station to the rest
+sc_net_time <- sfnet_individual %>% 
+  st_network_cost() %>% 
+  # Convert to number
+  units::drop_units() %>% 
+  # Divide by standard speed
+  `/`(param_travel_speed) %>% 
+  round() %>% 
+  # Multiply by OD matrix to calculate total travel times
+  `*` (mtx_od) %>% 
+  sum()
+
+ggplot() + 
+  geom_sf(data = st_as_sf(x = sfnet_individual, "nodes"), colour = "hotpink") +
+  geom_sf(data = st_as_sf(x = sfnet_individual, "edges"), mapping = aes(colour = as.character(line_id))) +
+  theme_vaw_light()
   
 ```
 
