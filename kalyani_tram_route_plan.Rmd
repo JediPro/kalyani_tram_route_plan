@@ -997,12 +997,13 @@ sf_soln_stations <- obj_ga_station@solution[1,] %>%
 
 # Set number of lines --------------------
 param_n_line <- 2
+param_n_station <- max(sf_soln_stations$id)
 
 # Function to create line topology, ensuring a station belongs to atleast one line
 fx_generate_line_layout <- function(){
   # Create table
   table_stations <- tibble(id = 1:max(sf_soln_stations$id)) %>% 
-    mutate(line_id = case_when(id %in% sample(x = 2:max(sf_soln_stations$id), 
+    mutate(line_id = case_when(id %in% sample(x = 2:param_n_station, 
                                             size = param_n_line - 1, replace = FALSE) ~ 1, 
                              TRUE ~ 0),
            line_id = cumsum(line_id) + 1,
@@ -1019,14 +1020,14 @@ fx_generate_line_layout <- function(){
                                # Extract current set of stations
                                curr_vec <- x[[1]]
                                # Create vector for remaining set of station
-                               remain_vec <- setdiff(1:max(sf_soln_stations$id), curr_vec)
+                               remain_vec <- setdiff(1:param_n_station, curr_vec)
                                extra_vec <- sample(x = remain_vec, 
                                                    size = min(max(y - length(curr_vec), 0), 
                                                               length(remain_vec)))
                                # Shuffle vector
                                append_vec <- sample(c(curr_vec, extra_vec))
                                # Pad tp length of number of stations with 0
-                               vec_zero <- rep(0, max(sf_soln_stations$id) - length(append_vec))
+                               vec_zero <- rep(0, param_n_station - length(append_vec))
                               # Return final padded vector
                               return(c(append_vec, vec_zero))
                              })) %>% 
@@ -1050,8 +1051,32 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
   mutate(col_name = row_number()) %>%
   ungroup() %>%
   # Combine line station vectors into one vector
-  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id)
+  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>% 
+  # Stores as matrix
+  select(-indiv_index) %>% 
+  as.matrix()
 
-# Define fitness function -----------------------------
+# Function to check connectedness and calculate fitness function ---------------
+vec_individual <- mtx_popn_sample[6,]
+
+# Create line string representations of each line ------------------
+fgh <- vec_individual %>% 
+  # Store as tibble
+  tibble(station_id = .) %>% 
+  # Assign row numbers
+  mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+  # remove rows which have 0s
+  filter(station_id != 0) %>% 
+  # Fetch point geometries
+  left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+  st_as_sf(crs = 4326) %>% 
+  select(-station_id) %>% 
+  # Create linestrings
+  group_by(line_id) %>% 
+  summarise(do_union = FALSE) %>% 
+  st_cast(to = "LINESTRING")
+
+ggplot(fgh) + geom_sf(aes(colour = as.character(line_id)))
+  
 ```
 
