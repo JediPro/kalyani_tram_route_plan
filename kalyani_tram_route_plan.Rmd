@@ -592,7 +592,7 @@ sc_total_demand <- sum(sf_popn$popn) + sum(sf_demand_point$demand)
 #   return(round(popn_serve_station))
 # }
 
-# Define function to calculate population served by each station --------------------
+# Function for fitness calculation --------------------
 fx_ga_fitness <- function(vec_individual){
   # vec_individual <- mtx_popn_sample[1,]
   # print("Fitness calculation started ...")
@@ -1174,62 +1174,65 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
   select(-indiv_index) %>% 
   as.matrix()
 
-# Function to check connectedness and calculate fitness function
-vec_individual <- mtx_popn_sample[10,]
+# Function to calculate fitness function
+fx_ga_fitness <- function(vec_individual){
+  # vec_individual <- mtx_popn_sample[10,]
 
-# Create line string representations of each line
-sfnet_individual <- vec_individual %>% 
-  # Store as tibble
-  tibble(station_id = .) %>% 
-  # Assign row numbers
-  mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
-  # remove rows which have 0s
-  filter(station_id != 0) %>% 
-  # Fetch point geometries
-  left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
-  st_as_sf(crs = 4326) %>% 
-  select(-station_id) %>% 
-  # Create line segments between each point and next, grouped by line
-  group_by(line_id) %>% 
-  mutate(next_point = lead(geometry)) %>% 
-  ungroup() %>% 
-  # Remove row where next point is NA
-  filter(!st_is_empty(next_point)) %>% 
-  rowwise() %>% 
-  mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-  st_cast(to = "LINESTRING") %>% 
-  # Remove helper
-  select(-next_point) %>% 
-  # Convert to sf network object
-  as_sfnetwork(directed = FALSE) %>% 
-  # Fetch Station IDs, since sfnetwork shuffles order
-  activate(nodes) %>% 
-  st_join(y = sf_soln_stations) %>% 
-  arrange(id)
+  # Create line string representations of each line
+  sfnet_individual <- vec_individual %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Fetch point geometries
+    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+    st_as_sf(crs = 4326) %>% 
+    select(-station_id) %>% 
+    # Create line segments between each point and next, grouped by line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>% 
+    ungroup() %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    st_cast(to = "LINESTRING") %>% 
+    # Remove helper
+    select(-next_point) %>% 
+    # Convert to sf network object
+    as_sfnetwork(directed = FALSE) %>% 
+    # Fetch Station IDs, since sfnetwork shuffles order
+    activate(nodes) %>% 
+    st_join(y = sf_soln_stations) %>% 
+    arrange(id)
+  
+  # Calculate total length of network
+  sc_net_length <- sfnet_individual %>% 
+    # Extract edges
+    st_as_sf("edges") %>% 
+    # Find length of each segment
+    st_length() %>% 
+    sum() %>% 
+    as.numeric()
+  
+  # Calculate total length from each station to the rest
+  sc_net_time <- sfnet_individual %>% 
+    st_network_cost() %>% 
+    # Convert to number
+    units::drop_units() %>% 
+    # Divide by standard speed
+    `/`(param_travel_speed) %>% 
+    round() %>% 
+    # Multiply by OD matrix to calculate total travel times
+    `*` (mtx_od) %>% 
+    sum()
+  
+  # Multiply both and return a value. Return as log to make it more readable
+  return(log(1/(sc_net_length * sc_net_time)))
+}
 
-# Check if network is connected
-sc_connected <- igraph::is_connected(sfnet_individual, mode = "weak")
-
-# Calculate total length of network
-sc_net_length <- sfnet_individual %>% 
-  # Extract edges
-  st_as_sf("edges") %>% 
-  # Find length of each segment
-  st_length() %>% 
-  sum() %>% 
-  as.numeric()
-
-# Calculate total length from each station to the rest
-sc_net_time <- sfnet_individual %>% 
-  st_network_cost() %>% 
-  # Convert to number
-  units::drop_units() %>% 
-  # Divide by standard speed
-  `/`(param_travel_speed) %>% 
-  round() %>% 
-  # Multiply by OD matrix to calculate total travel times
-  `*` (mtx_od) %>% 
-  sum()
 
 ggplot() + 
   geom_sf(data = st_as_sf(x = sfnet_individual, "nodes"), colour = "hotpink") +
