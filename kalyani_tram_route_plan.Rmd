@@ -1001,8 +1001,9 @@ param_sd_sat_dist <- 600
 param_n_line <- 2
 param_n_station <- max(sf_soln_stations$id)
 param_travel_speed <- 7 # In metres/sec
+popSize <- 200
 
-# Calculate population served for each station -----------------------
+# Calculate point generator demand served per station -----------------------
 data_station_point_served <- sf_soln_stations %>% 
   # Calculate distance to each point point generator
   st_distance(y = sf_demand_point, by_element = FALSE) %>% 
@@ -1023,7 +1024,7 @@ data_station_point_served <- sf_soln_stations %>%
   # Convert to tibble
   tibble(generator_popn_served = .)
 
-# Calculate resident population served -----------------------
+# Calculate total demand served -----------------------
 data_station_popn_served <- sf_soln_stations %>% 
   # Calculate distance to all points in raster sf
   st_distance(y = sf_popn, by_element = FALSE) %>% 
@@ -1117,66 +1118,81 @@ while(!flag_converge & curr_iter < 100){
 # Round off matrix
 mtx_od <- round(mtx_od)
 
-# Function to create line topology, ensuring a station belongs to atleast one line ----------------------
-fx_generate_line_layout <- function(){
+# Function to check network connectedness ----------------------
+fx_check_connected <- function(vec_layout){
+  # vec_layout = mtx_popn_sample[1, ]
   # Create table
-  table_stations <- tibble(id = 1:max(sf_soln_stations$id)) %>% 
-    mutate(line_id = case_when(id %in% sample(x = 2:param_n_station, 
-                                            size = param_n_line - 1, replace = FALSE) ~ 1, 
-                             TRUE ~ 0),
-           line_id = cumsum(line_id) + 1,
-           # Shuffle ids
-           id = sample(id)) %>% 
-    # Nest
-    nest(id = id) %>% 
-    # Set number of stations per line
-    mutate(num_station = sample(x = 2:max(sf_soln_stations$id), 
-                                size = nrow(.), replace = TRUE),
-           # Add more stations to line if num stations is lower than selected
-           station_id = map2(.x = id, .y = num_station, 
-                             .f = function(x,y){
-                               # Extract current set of stations
-                               curr_vec <- x[[1]]
-                               # Create vector for remaining set of station
-                               remain_vec <- setdiff(1:param_n_station, curr_vec)
-                               extra_vec <- sample(x = remain_vec, 
-                                                   size = min(max(y - length(curr_vec), 0), 
-                                                              length(remain_vec)))
-                               # Shuffle vector
-                               append_vec <- sample(c(curr_vec, extra_vec))
-                               # Pad tp length of number of stations with 0
-                               vec_zero <- rep(0, param_n_station - length(append_vec))
-                              # Return final padded vector
-                              return(c(append_vec, vec_zero))
-                             })) %>% 
-    # Select columns
-    select(line_id, station_id) %>% 
-    unnest_longer(col = station_id)
+  sc_connected <- vec_layout %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Fetch point geometries
+    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+    st_as_sf(crs = 4326) %>% 
+    select(-station_id) %>% 
+    # Create line segments between each point and next, grouped by line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>% 
+    ungroup() %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    st_cast(to = "LINESTRING") %>% 
+    # Remove helper
+    select(-next_point) %>% 
+    # Convert to sf network object
+    as_sfnetwork(directed = FALSE) %>% 
+    # Check for connectedness
+    igraph::is_connected(mode = "weak")
   
-  return(table_stations)
+  return(sc_connected)
 }
 
-# Create initial population -----------------------
-mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
-  # Create individual line layouts
-  mutate(line = map(.x = indiv_index, 
-                    .f = function(x){fx_generate_line_layout()})) %>% 
-  unnest(cols = line) %>% 
+# Create sample population -----------------------
+# 1 row for each line in each individual
+mtx_popn_sample <- tibble(indiv_index = 1:10, line_id = list(1:param_n_line)) %>%
+  unnest_longer(col = line_id) %>%
+  # Randomly select a number to signify number of stations per line
+  mutate(num_station = sample(x = 1:param_n_station,
+                              size = nrow(.), replace = TRUE),
+         # Select that many stations at random from set of stations
+         station_id = map(.x = num_station,
+                          .f = function(x){
+                            sample(x = 1:param_n_station, size = x,
+                                   replace = FALSE)
+                          })) %>%
+  unnest_longer(col = station_id) %>%
+  # Explode data frame so that each individual has equal number of rows
+  select(-num_station) %>%
+  # Set station index
+  group_by(indiv_index, line_id) %>%
+  mutate(index = row_number()) %>%
+  ungroup() %>%
+  complete(indiv_index, line_id, index = 1:param_n_station,
+               fill = list(station_id = 0)) %>%
   # Remove unwanted column
-  select(-c(line_id)) %>% 
+  select(-c(line_id)) %>%
   # Assign column names
   group_by(indiv_index) %>%
-  mutate(col_name = row_number()) %>%
+  mutate(index = row_number()) %>%
   ungroup() %>%
   # Combine line station vectors into one vector
-  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>% 
+  pivot_wider(id_cols = indiv_index, names_from = index, values_from = station_id) %>%
   # Stores as matrix
-  select(-indiv_index) %>% 
-  as.matrix()
+  select(-indiv_index) %>%
+  as.matrix() %>%
+  # Only keep rows which form a connected network
+  (function(mtx) mtx[apply(X = mtx, MARGIN = 1, FUN = fx_check_connected), ])
 
 # Function for Fitness Calculation ---------------------------
 fx_ga_fitness <- function(vec_individual){
   # vec_individual <- mtx_popn_sample[10,]
+  print("Fitness Calculation started ...")
+  print(vec_individual)
 
   # Create line string representations of each line
   sfnet_individual <- vec_individual %>% 
@@ -1217,6 +1233,9 @@ fx_ga_fitness <- function(vec_individual){
     sum() %>% 
     as.numeric()
   
+  print(sfnet_individual %>% 
+    st_network_cost())
+  
   # Calculate total length from each station to the rest
   sc_net_time <- sfnet_individual %>% 
     st_network_cost() %>% 
@@ -1229,6 +1248,7 @@ fx_ga_fitness <- function(vec_individual){
     `*` (mtx_od) %>% 
     sum()
   
+  print("Fitness Calculation Completed!")
   # Multiply both and return a value. Return as log to make it more readable
   return(log(1/(sc_net_length * sc_net_time)))
 }
@@ -1236,35 +1256,55 @@ fx_ga_fitness <- function(vec_individual){
 # Function for Population Initiation -------------------------
 fx_ga_init_popn <- function(obj_ga){
   # popn_size <- 200
-  # print("Initial Population Generation started ...")
+  print("Initial Population Generation started ...")
   # Create population matrix
-  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>%
-  # Create individual line layouts
-  mutate(line = map(.x = indiv_index, 
-                    .f = function(x){fx_generate_line_layout()})) %>% 
-  unnest(cols = line) %>% 
+  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize, 
+                     line_id = list(1:param_n_line)) %>%
+  unnest_longer(col = line_id) %>% 
+  # Randomly select a number to signify number of stations per line
+  mutate(num_station = sample(x = 1:param_n_station, 
+                              size = nrow(.), replace = TRUE),
+         # Select that many stations at random from set of stations
+         station_id = map(.x = num_station, 
+                          .f = function(x){
+                            sample(x = 1:param_n_station, size = x, 
+                                   replace = FALSE)
+                          })) %>% 
+  unnest_longer(col = station_id) %>% 
+  # Explode data frame so that each individual has equal number of rows
+  select(-num_station) %>% 
+  # Set station index
+  group_by(indiv_index, line_id) %>% 
+  mutate(index = row_number()) %>% 
+  ungroup() %>% 
+  complete(indiv_index, line_id, index = 1:param_n_station, 
+               fill = list(station_id = 0)) %>% 
   # Remove unwanted column
-  select(-c(line_id)) %>% 
+  select(-c(line_id)) %>%
   # Assign column names
   group_by(indiv_index) %>%
-  mutate(col_name = row_number()) %>%
+  mutate(index = row_number()) %>%
   ungroup() %>%
   # Combine line station vectors into one vector
-  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>% 
+  pivot_wider(id_cols = indiv_index, names_from = index, values_from = station_id) %>%
   # Stores as matrix
-  select(-indiv_index) %>% 
-  as.matrix()
+  select(-indiv_index) %>%
+  as.matrix() %>% 
+  # Only keep rows which form a connected network
+  (function(mtx) mtx[apply(X = mtx, MARGIN = 1, FUN = fx_check_connected), ])
   
-  # print("Initial Population generated!")
+  print("Initial Population generated!")
+  print(mtx_popn)
   
   return(mtx_popn)
 }
 
 # Function for Population Selection --------------------------
 fx_ga_select_popn <- function(obj_ga){
-  # print("Population Selection process started ...")
+  print("Population Selection process started ...")
   # Extract fitness value of current generation
   ga_curr_fitness <- obj_ga@fitness
+  print(ga_curr_fitness)
   # Assign probabilities to each individual, proportional to the fitness value
   curr_probs <- ga_curr_fitness/sum(ga_curr_fitness)
   # Select indices of individuals from population, but based on their fitness
@@ -1275,16 +1315,16 @@ fx_ga_select_popn <- function(obj_ga){
   mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
   vec_popn_fitness <- obj_ga@fitness[popn_sel]
   
-  # print("Population Selection process complete!")
+  print("Population Selection process complete!")
   
   return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
 }
 
-# Function to implement mutation --------------------------
+# Function for Crossover --------------------------
 fx_ga_crossover_popn <- function(obj_ga, parent_indices){
   # mtx_popn = mtx_popn_sample
   # parent_indices = matrix(data = c(1, 3), nrow = 2)
-  # print("Population Crossover operation started ...")
+  print("Population Crossover operation started ...")
   # Extract population matrix from GA object
   mtx_popn <- obj_ga@population
   
@@ -1323,59 +1363,9 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices){
   
   # Check if new individuals are still connected
   # Parent 1
-  sc_connected_m <- mtx_children[1,] %>% 
-    # Store as tibble
-    tibble(station_id = .) %>% 
-    # Assign row numbers
-    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
-    # remove rows which have 0s
-    filter(station_id != 0) %>% 
-    # Fetch point geometries
-    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
-    st_as_sf(crs = 4326) %>% 
-    select(-station_id) %>% 
-    # Create line segments between each point and next, grouped by line
-    group_by(line_id) %>% 
-    mutate(next_point = lead(geometry)) %>% 
-    ungroup() %>% 
-    # Remove row where next point is NA
-    filter(!st_is_empty(next_point)) %>% 
-    rowwise() %>% 
-    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-    st_cast(to = "LINESTRING") %>% 
-    # Remove helper
-    select(-next_point) %>% 
-    # Convert to sf network object
-    as_sfnetwork(directed = FALSE) %>% 
-    # Check for connectedness
-    igraph::is_connected(mode = "weak")
+  sc_connected_m <- fx_check_connected(vec_layout = mtx_children[1,])
   # Parent 2
-  sc_connected_f <- mtx_children[2,] %>% 
-    # Store as tibble
-    tibble(station_id = .) %>% 
-    # Assign row numbers
-    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
-    # remove rows which have 0s
-    filter(station_id != 0) %>% 
-    # Fetch point geometries
-    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
-    st_as_sf(crs = 4326) %>% 
-    select(-station_id) %>% 
-    # Create line segments between each point and next, grouped by line
-    group_by(line_id) %>% 
-    mutate(next_point = lead(geometry)) %>% 
-    ungroup() %>% 
-    # Remove row where next point is NA
-    filter(!st_is_empty(next_point)) %>% 
-    rowwise() %>% 
-    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-    st_cast(to = "LINESTRING") %>% 
-    # Remove helper
-    select(-next_point) %>% 
-    # Convert to sf network object
-    as_sfnetwork(directed = FALSE) %>% 
-    # Check for connectedness
-    igraph::is_connected(mode = "weak")
+  sc_connected_f <- fx_check_connected(vec_layout = mtx_children[2,])
   
   # Define list to return based on connectedness
   if(sc_connected_m & sc_connected_f){
@@ -1387,14 +1377,14 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices){
                         fitness = c(obj_ga@fitness[parent_indices,]))
   }
   
-  # print("Population Crossover operation completed!")
+  print("Population Crossover operation completed!")
   return(list_return)
 }
 
-# Function to implement mutation ----------------------------------
+# Function for Mutation ----------------------------------
 fx_ga_mutate_popn <- function(obj_ga, vec_parent){
   # vec_parent = mtx_popn_sample[4,]
-  # print("Population Mutation operation started ...")
+  print("Population Mutation operation started ...")
   # 6 different mutations can occur. Select a number randomly to decide which to implement
   # 1: Exchange of the position of two stations in a line
   # 2: Order reversal of subset of stations for a line
@@ -1642,32 +1632,7 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
   }
   
   # Check if mutant network is connected
-  sc_connected <- vec_mutant %>% 
-    # Store as tibble
-    tibble(station_id = .) %>% 
-    # Assign row numbers
-    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
-    # remove rows which have 0s
-    filter(station_id != 0) %>% 
-    # Fetch point geometries
-    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
-    st_as_sf(crs = 4326) %>% 
-    select(-station_id) %>% 
-    # Create line segments between each point and next, grouped by line
-    group_by(line_id) %>% 
-    mutate(next_point = lead(geometry)) %>% 
-    ungroup() %>% 
-    # Remove row where next point is NA
-    filter(!st_is_empty(next_point)) %>% 
-    rowwise() %>% 
-    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-    st_cast(to = "LINESTRING") %>% 
-    # Remove helper
-    select(-next_point) %>% 
-    # Convert to sf network object
-    as_sfnetwork(directed = FALSE) %>% 
-    # Check for connectedness
-    igraph::is_connected(mode = "weak")
+  sc_connected <- fx_check_connected(vec_layout = vec_mutant)
   
   # Define list to return based on connectedness
   if(sc_connected){
@@ -1677,52 +1642,31 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
     # If not connected, return the parents
     vec_return <- vec_parent
   }
-  
-  # print("Population Crossover operation completed!")
-  return(vec_return)
     
-  # print("Population Mutation operation completed!")
-  return(vec_mutant)
+  print("Population Mutation operation completed!")
+  return(vec_return)
 }
 
 # Create GA function ------------------------------------------
-# Set bounds
-vec_bounds <- sf_bbox %>% 
-  st_coordinates() %>% 
-  as_tibble() %>% 
-  mutate(grp = 1) %>% 
-  summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
-  unlist()
 # Set population size
-popSize <- 200
-# Set system parameters
-param_n_station <- 20
-param_sd_sat_dist <- 600
-# Define list to store population matrix and fitness vectors
-global_popn_fitness <- list(popn = NULL, fitness = NULL)
+popSize <- 10
 
 # Create GA object
 t0 <- Sys.time()
 print(t0)
 obj_ga_station <- GA::ga(type = "real-valued", 
-                         lower = rep(x = c(vec_bounds["min_x"], vec_bounds["min_y"]), 
-                                     times = param_n_station) %>% unname(), 
-                         upper = rep(x = c(vec_bounds["max_x"], vec_bounds["max_y"]), 
-                                     times = param_n_station) %>% unname(), 
+                         lower = rep(x = 0, times = param_n_station * param_n_line),
+                         upper = rep(x = 20, times = param_n_station * param_n_line),
                          fitness = fx_ga_fitness, 
                          population = fx_ga_init_popn, 
                          selection = fx_ga_select_popn, 
-                         crossover = function(...) fx_ga_crossover_popn(..., 
-                                                                        p_cross_subset = 0.5),
-                         mutation = function(...) fx_ga_mutate_popn(..., 
-                                                                    std_mutation_shift = 0.1, 
-                                                                    p_mutation_subset = 0.2),
+                         crossover = fx_ga_crossover_popn,
+                         mutation = fx_ga_mutate_popn,
                          popSize = popSize, 
                          pcrossover = 0.7,
                          pmutation = 0.03,
                          elitism = max(1, round(popSize * 0.03)), 
-                         maxiter = 200,
-                         # postFitness = fx_ga_save_popn,
+                         maxiter = 10,
                          run = 30, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
@@ -1730,10 +1674,7 @@ print(difftime(time1 = Sys.time(), time2 = t0))
 write_rds(x = obj_ga_station, file = "obj_ga_station.rds")
 
 
-ggplot() + 
-  geom_sf(data = st_as_sf(x = sfnet_individual, "nodes"), colour = "hotpink") +
-  geom_sf(data = st_as_sf(x = sfnet_individual, "edges"), mapping = aes(colour = as.character(line_id))) +
-  theme_vaw_light()
+vec_individual <- c(5,2,17,15, 18, 11, 13,3, 14,9,7,0,0,0,0,0,0,0,0,0, 16, 20,6,8, 19,4, 10,1, 12,0,0,0,0,0,0,0, 0,0,0,0)
   
 ```
 
