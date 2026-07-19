@@ -1393,7 +1393,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices){
 
 # Function to implement mutation ----------------------------------
 fx_ga_mutate_popn <- function(obj_ga, vec_parent){
-  # vec_parent = mtx_popn[4,]
+  # vec_parent = mtx_popn_sample[4,]
   # print("Population Mutation operation started ...")
   # 6 different mutations can occur. Select a number randomly to decide which to implement
   # 1: Exchange of the position of two stations in a line
@@ -1490,7 +1490,7 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
   else if(sc_select_mutation == 3){
     # Select which line to apply mutation to
     sc_line_select <- sample(x = 1:param_n_line, size = 1)
-    # Select two positions on that line to exchange
+    # Select a positions on that line to remove
     sc_position_remove <- sample(x = table_mutant %>% 
                                      filter(line_id == sc_line_select) %>% 
                                      `$`(index), 
@@ -1511,56 +1511,175 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
       unlist(use.names = FALSE)
   }
   # Mutation 4
-  else if(sc_select_mutation == 3){
-    
+  else if(sc_select_mutation == 4){
+    # Select which line to apply mutation to
+    sc_line_select <- sample(x = 1:param_n_line, size = 1)
+    # If all stations are already present in line, then skip
+    if(length(table_mutant %>% 
+              filter(line_id == sc_line_select) %>% 
+              `$`(index)) == param_n_station) {
+      vec_mutant <- vec_parent
+    } else {
+      # Select a positions on that line to add
+      sc_position_add <- sample(x = table_mutant %>% 
+                                       filter(line_id == sc_line_select) %>% 
+                                       `$`(index), 
+                                     size = 1, replace = FALSE)
+      # Select which station to add
+      sc_station_add <- sample(x = setdiff(x = 1:param_n_station, 
+                                           y = table_mutant %>% 
+                                             filter(line_id == sc_line_select) %>% 
+                                             `$`(station_id)), size = 1)
+      # Create mutant vector
+      vec_mutant <- table_mutant %>% 
+        # Create duplicate row for index where new station is to be added
+        mutate(extra = case_when(line_id == sc_line_select & 
+                                   index == sc_position_add ~ list(c(0,1)),
+                                 TRUE ~ list(c(0)))) %>% 
+        unnest_longer(col = extra) %>% 
+        # Add the station at position of newly created row
+        mutate(station_id = case_when(line_id == sc_line_select & 
+                                        extra == 1 ~ sc_station_add,
+                                      TRUE ~ station_id)) %>% 
+        # Recode indices
+        group_by(line_id) %>% 
+        mutate(index = row_number()) %>% 
+        ungroup() %>% 
+        # Create new rows to have equal numbers of rows for each line
+        complete(line_id, index = 1:param_n_station, 
+                 fill = list(station_id = 0)) %>% 
+        # Final vector
+        select(station_id) %>% 
+        unlist(use.names = FALSE)
+    }
+  }
+  # Mutation 5
+  else if(sc_select_mutation == 5){
+    # Select two lines
+    vec_lines_select <- sample(x = 1:param_n_line, size = 2, replace = FALSE)
+    # Select position of station from 1st line to exchange
+    sc_position_line1 <- sample(x = table_mutant %>% 
+                                       filter(line_id == vec_lines_select[1]) %>% 
+                                       `$`(index), 
+                                     size = 1, replace = FALSE)
+    # Select position of station from 2nd line to exchange
+    sc_position_line2 <- sample(x = table_mutant %>% 
+                                       filter(line_id == vec_lines_select[2]) %>% 
+                                       `$`(index), 
+                                     size = 1, replace = FALSE)
+    # Create mapping tibble
+    table_exchange <- tibble(line_id = vec_lines_select, 
+                             index = c(sc_position_line1, sc_position_line2)) %>% 
+      # Fetch corresponding station ids
+      left_join(y = table_mutant, by = c("line_id", "index")) %>% 
+      # Reversen the station ids
+      mutate(station_id = rev(station_id))
+    # Create mutant vector
+    vec_mutant <- table_mutant %>% 
+      # Fetch exchanged stations
+      left_join(y = table_exchange, by = c("line_id", "index"), 
+                suffix = c("", "_new")) %>% 
+      # Exchange positions
+      mutate(station_id = case_when(is.na(station_id_new) ~ station_id,
+                                    TRUE ~ station_id_new)) %>% 
+      select(-station_id_new) %>% 
+      # Create new rows to have equal numbers of rows for each line
+      complete(line_id, index = 1:param_n_station, 
+               fill = list(station_id = 0)) %>% 
+      # Final vector
+      select(station_id) %>% 
+      unlist(use.names = FALSE)
+  }
+  # Mutant 6
+  else if (sc_select_mutation == 6){
+    # Select two lines
+    vec_lines_select <- sample(x = 1:param_n_line, size = 2, replace = FALSE)
+    # Select position of station from 1st line to exchange
+    sc_position_line1 <- sample(x = table_mutant %>% 
+                                       filter(line_id == vec_lines_select[1]) %>% 
+                                       `$`(index), 
+                                     size = 1, replace = FALSE)
+    # Select position of station from 2nd line to exchange
+    sc_position_line2 <- sample(x = table_mutant %>% 
+                                       filter(line_id == vec_lines_select[2]) %>% 
+                                       `$`(index), 
+                                     size = 1, replace = FALSE)
+    # Station will be transferred from 1st selected line to second
+    # Check if second line is at max capacity. If yes, return parent
+    if(length(table_mutant %>% 
+              filter(line_id == vec_lines_select[2]) %>% 
+              `$`(index)) == param_n_station) {
+      vec_mutant <- vec_parent
+    } else {
+      # Select which station to add
+      sc_station_add <- table_mutant %>% 
+        filter(line_id == vec_lines_select[1] & index == sc_position_line1) %>% 
+        select(station_id) %>% unlist(use.names = FALSE)
+      # Create mutant vector
+      vec_mutant <- table_mutant %>% 
+        # Remove station from first line
+        filter(!(line_id == vec_lines_select[1] & index == sc_position_line1)) %>% 
+        # Create duplicate row for index where new station is to be added
+        mutate(extra = case_when(line_id == vec_lines_select[2] & 
+                                   index == sc_position_line2 ~ list(c(0,1)),
+                                 TRUE ~ list(c(0)))) %>% 
+        unnest_longer(col = extra) %>% 
+        # Add the station at position of newly created row
+        mutate(station_id = case_when(line_id == vec_lines_select[2] & 
+                                        extra == 1 ~ sc_station_add,
+                                      TRUE ~ station_id)) %>% 
+        # Recode indices
+        group_by(line_id) %>% 
+        mutate(index = row_number()) %>% 
+        ungroup() %>% 
+        # Create new rows to have equal numbers of rows for each line
+        complete(line_id, index = 1:param_n_station, 
+                 fill = list(station_id = 0)) %>% 
+        # Final vector
+        select(station_id) %>% 
+        unlist(use.names = FALSE)
+    }
   }
   
-  # Create tibble of coordinate points
-  vec_mutant <- vec_parent %>% 
-    # Convert to tibble
-    as_tibble_col() %>% 
-    # Recode values
-    mutate(coord = row_number(),
-           # Mark lats and lons
-           coord = case_when(coord %% 2 == 1 ~ "lon", coord %% 2 == 0 ~ "lat")) %>% 
-    # Create an index for each point, consisting of pairs of coordinates
-    mutate(point_index = case_when(coord == "lon" ~ 1, TRUE ~ 0),
-           point_index = cumsum(point_index)) %>% 
-    # Wide aqain
-    pivot_wider(id_cols = c(point_index), 
-                names_from = c(coord), values_from = value) %>% 
-    # Sample points to mutate
-    mutate(mutate = sample(x = c(1, 0), size = nrow(.), replace = TRUE, 
-                         prob = c(p_mutation_subset, 1 - p_mutation_subset)),
-           # Shift coordinates by some points
-           lon_new = lon + (rnorm(n = nrow(.), mean = 0, sd = dist_lon) * mutate),
-           lat_new = lat + (rnorm(n = nrow(.), mean = 0, sd = dist_lat) * mutate),
-           # Create non geometry fields
-           lon_fix = lon_new, lat_fix = lat_new) %>% 
-    # Convert to sf
-    st_as_sf(coords = c("lon_new", "lat_new"), crs = 4326) %>% 
-    # Flag points which fall within the city limits
-    mutate(intersects = st_intersects(x = geometry,  y = sf_city_limits, sparse = FALSE)[1,],
-           # If any point is outside city limits, revert to initial coordinates
-           lon_fix = case_when(!intersects ~ lon, TRUE ~ lon_fix),
-           lat_fix = case_when(!intersects ~ lat, TRUE ~ lat_fix)) %>% 
-    # Convert back to tibble
-    as_tibble() %>% 
-    # Remove temp vars
-    select(point_index, lon_fix, lat_fix) %>% 
-    # Switch back to matrix form
-    pivot_longer(cols = -point_index, names_to = c("coord"), 
-                 names_pattern = "(.*)_fix", values_to = "value") %>% 
-    # Index the coords
-    mutate(coord = factor(x = coord, levels = c("lon", "lat"))) %>% 
-    # Arrange
-    arrange(point_index, coord) %>% 
-    # Recode indices
-    mutate(point_index = row_number()) %>% 
-    # Remove field
-    select(value) %>% 
-    # Convert to vector
-    unlist(use.names = FALSE)
+  # Check if mutant network is connected
+  sc_connected <- vec_mutant %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Fetch point geometries
+    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+    st_as_sf(crs = 4326) %>% 
+    select(-station_id) %>% 
+    # Create line segments between each point and next, grouped by line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>% 
+    ungroup() %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    st_cast(to = "LINESTRING") %>% 
+    # Remove helper
+    select(-next_point) %>% 
+    # Convert to sf network object
+    as_sfnetwork(directed = FALSE) %>% 
+    # Check for connectedness
+    igraph::is_connected(mode = "weak")
+  
+  # Define list to return based on connectedness
+  if(sc_connected){
+    # If new netwroks are connected, return the children
+    vec_return <- vec_mutant
+  } else {
+    # If not connected, return the parents
+    vec_return <- vec_parent
+  }
+  
+  # print("Population Crossover operation completed!")
+  return(vec_return)
     
   # print("Population Mutation operation completed!")
   return(vec_mutant)
