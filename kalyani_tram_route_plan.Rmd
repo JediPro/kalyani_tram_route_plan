@@ -1447,8 +1447,41 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
       # Final vector
       select(station_id) %>% 
       unlist(use.names = FALSE)
-  } else if(sc_select_mutation == 2){
     
+  } else if(sc_select_mutation == 2){
+    # Select which line to apply mutation to
+    sc_line_select <- sample(x = 1:param_n_line, size = 1)
+    # Select size of station subset
+    sc_subset_start <- sample(x = 1:(max(table_mutant %>% 
+                                          filter(line_id == sc_line_select) %>% 
+                                          `$`(index))-3), size = 1)
+    # Select end of subset
+    sc_subset_end <- sample(x = sc_subset_start:(max(table_mutant %>% 
+                                          filter(line_id == sc_line_select) %>% 
+                                          `$`(index))), size = 1)
+    # Select two positions on that line to exchange
+    sc_position_reverse <- c(sc_subset_start:sc_subset_end) %>% 
+      # Convert to tibble for easier join
+      tibble(curr_order = ., revr_order = rev(.), line_id = sc_line_select) %>% 
+      # join to curr table
+      left_join(y = table_mutant, by = c("line_id", "revr_order" = "index")) %>% 
+      select(-revr_order)
+    # Create mutant vector
+    vec_mutant <- table_mutant %>% 
+      # Fetch new station ids
+      left_join(y = sc_position_reverse, 
+                by = c("line_id", "index" = "curr_order"), 
+                suffix = c("", "_new")) %>% 
+      # Replace original with new
+      mutate(station_id = case_when(is.na(station_id_new) ~ station_id,
+                                    TRUE ~ station_id_new)) %>% 
+      select(-station_id_new) %>% 
+      # Create new rows to have equal number of rows for each line
+      complete(line_id, index = 1:param_n_station, 
+               fill = list(station_id = 0)) %>% 
+      # Final vector
+      select(station_id) %>% 
+      unlist(use.names = FALSE)
   }
   
   # Create tibble of coordinate points
