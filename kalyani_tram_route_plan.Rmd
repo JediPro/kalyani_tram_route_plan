@@ -592,6 +592,27 @@ sc_total_demand <- sum(sf_popn$popn) + sum(sf_demand_point$demand)
 #   return(round(popn_serve_station))
 # }
 
+# Sample matrix --------------------------
+# mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
+#     # Create sf vector of sample points for each individual
+#     mutate(sf_sample = map(.x = indiv_index, .f = function(x){
+#       # Generate samples for each individual
+#       st_sample(x = sf_city_limits, size = 10) %>%
+#         # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
+#         st_coordinates() %>% t() %>% as.vector()
+#     }, .progress = TRUE)) %>%
+#     # Remove list column
+#     unnest(cols = sf_sample) %>%
+#     # Assign column names
+#     group_by(indiv_index) %>%
+#     mutate(col_name = row_number()) %>%
+#     ungroup() %>%
+#     # Wide form
+#     pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>%
+#     # Convert to matrix
+#     select(-indiv_index) %>%
+#     as.matrix()
+
 # Function for fitness calculation --------------------
 fx_ga_fitness <- function(vec_individual){
   # vec_individual <- mtx_popn_sample[1,]
@@ -878,27 +899,6 @@ param_sd_sat_dist <- 600
 # Define list to store population matrix and fitness vectors
 global_popn_fitness <- list(popn = NULL, fitness = NULL)
 
-# Define sample matrix for functions ---------------------
-# mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
-#     # Create sf vector of sample points for each individual
-#     mutate(sf_sample = map(.x = indiv_index, .f = function(x){
-#       # Generate samples for each individual
-#       st_sample(x = sf_city_limits, size = 10) %>%
-#         # Convert to coordinates and create a vector in the form of Lon1, Lat1, Lon2, Lat2, etc
-#         st_coordinates() %>% t() %>% as.vector()
-#     }, .progress = TRUE)) %>%
-#     # Remove list column
-#     unnest(cols = sf_sample) %>%
-#     # Assign column names
-#     group_by(indiv_index) %>%
-#     mutate(col_name = row_number()) %>%
-#     ungroup() %>%
-#     # Wide form
-#     pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = sf_sample) %>%
-#     # Convert to matrix
-#     select(-indiv_index) %>%
-#     as.matrix()
-
 # Create GA object
 t0 <- Sys.time()
 print(t0)
@@ -1174,7 +1174,7 @@ mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
   select(-indiv_index) %>% 
   as.matrix()
 
-# Function to calculate fitness function
+# Function for Fitness Calculation ---------------------------
 fx_ga_fitness <- function(vec_individual){
   # vec_individual <- mtx_popn_sample[10,]
 
@@ -1232,6 +1232,220 @@ fx_ga_fitness <- function(vec_individual){
   # Multiply both and return a value. Return as log to make it more readable
   return(log(1/(sc_net_length * sc_net_time)))
 }
+
+# Function for Population Initiation -------------------------
+fx_ga_init_popn <- function(obj_ga){
+  # popn_size <- 200
+  # print("Initial Population Generation started ...")
+  # Create population matrix
+  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize) %>%
+  # Create individual line layouts
+  mutate(line = map(.x = indiv_index, 
+                    .f = function(x){fx_generate_line_layout()})) %>% 
+  unnest(cols = line) %>% 
+  # Remove unwanted column
+  select(-c(line_id)) %>% 
+  # Assign column names
+  group_by(indiv_index) %>%
+  mutate(col_name = row_number()) %>%
+  ungroup() %>%
+  # Combine line station vectors into one vector
+  pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>% 
+  # Stores as matrix
+  select(-indiv_index) %>% 
+  as.matrix()
+  
+  # print("Initial Population generated!")
+  
+  return(mtx_popn)
+}
+
+# Function for Population Selection --------------------------
+fx_ga_select_popn <- function(obj_ga){
+  # print("Population Selection process started ...")
+  # Extract fitness value of current generation
+  ga_curr_fitness <- obj_ga@fitness
+  # Assign probabilities to each individual, proportional to the fitness value
+  curr_probs <- ga_curr_fitness/sum(ga_curr_fitness)
+  # Select indices of individuals from population, but based on their fitness
+  popn_sel <- sample(x = 1:obj_ga@popSize, size = obj_ga@popSize, 
+                     replace = TRUE, prob = curr_probs)
+  
+  # Select individuals from population\
+  mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
+  vec_popn_fitness <- obj_ga@fitness[popn_sel]
+  
+  # print("Population Selection process complete!")
+  
+  return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
+}
+
+# Function to implement mutation --------------------------
+fx_ga_crossover_popn <- function(obj_ga, parent_indices){
+  # mtx_popn = mtx_popn_sample
+  # parent_indices = matrix(data = c(1, 3), nrow = 2)
+  # print("Population Crossover operation started ...")
+  # Extract population matrix from GA object
+  mtx_popn <- obj_ga@population
+  
+  # Create tibble of coordinate points
+  mtx_children <- mtx_popn[parent_indices,] %>% 
+    # Convert to tibble
+    as_tibble() %>% 
+    # Add identifiers
+    mutate(parent_index = c("m", "f")) %>% 
+    # Long form
+    pivot_longer(cols = -parent_index, names_to = "index", values_to = "station_id") %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(as.integer(index) / param_n_station)) %>% 
+    # Randomly select any line index from each individual
+    group_by(parent_index) %>% 
+    mutate(line_select = sample(x = 1:param_n_line, size = 1, replace = FALSE),
+           # If selected line index matches original, swap the parent indices
+           parent_index = case_when(parent_index == "m" & line_id == line_select ~ "f",
+                                    parent_index == "f" & line_id == line_select ~ "m",
+                                    TRUE ~ parent_index)) %>% 
+    ungroup() %>% 
+    select(-line_select) %>% 
+    # Group again and recode indices
+    group_by(parent_index) %>% 
+    mutate(index = row_number(),
+           # Recode line numbers
+           line_id = ceiling(index / param_n_station)) %>% 
+    ungroup() %>% 
+    select(-line_id) %>% 
+    # Wide form
+    pivot_wider(id_cols = parent_index, names_from = index, 
+                values_from = station_id) %>% 
+    select(-parent_index) %>% 
+    # Convert to matrix
+    as.matrix()
+  
+  # print("Population Crossover operation completed!")
+  return(list(children = mtx_children,
+              fitness = c(NA_real_, NA_real_)))
+}
+
+# Function to implement mutation ----------------------------------
+fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutation_subset){
+  # mtx_popn = mtx_popn_sample
+  # parent_index = c(2)
+  # std_mutation_shift = 0.1
+  # p_mutation_subset = 0.5
+  # print("Population Mutation operation started ...")
+  # Extract population matrix from GA object
+  mtx_popn <- obj_ga@population
+  # Define shifts in coordinates needed 
+  dist_lat <- std_mutation_shift / 111.321
+  dist_lon <- std_mutation_shift / (111.321 * cos(st_centroid(x = sf_bbox) %>% 
+                                                   st_coordinates %>% 
+                                                   `[`(2) * pi/180))
+  
+  # Create tibble of coordinate points
+  vec_mutant <- mtx_popn %>% 
+    `[`(parent_index, ) %>% 
+    # Convert to tibble
+    as_tibble_col() %>% 
+    # Recode values
+    mutate(coord = row_number(),
+           # Mark lats and lons
+           coord = case_when(coord %% 2 == 1 ~ "lon", coord %% 2 == 0 ~ "lat")) %>% 
+    # Create an index for each point, consisting of pairs of coordinates
+    mutate(point_index = case_when(coord == "lon" ~ 1, TRUE ~ 0),
+           point_index = cumsum(point_index)) %>% 
+    # Wide aqain
+    pivot_wider(id_cols = c(point_index), 
+                names_from = c(coord), values_from = value) %>% 
+    # Sample points to mutate
+    mutate(mutate = sample(x = c(1, 0), size = nrow(.), replace = TRUE, 
+                         prob = c(p_mutation_subset, 1 - p_mutation_subset)),
+           # Shift coordinates by some points
+           lon_new = lon + (rnorm(n = nrow(.), mean = 0, sd = dist_lon) * mutate),
+           lat_new = lat + (rnorm(n = nrow(.), mean = 0, sd = dist_lat) * mutate),
+           # Create non geometry fields
+           lon_fix = lon_new, lat_fix = lat_new) %>% 
+    # Convert to sf
+    st_as_sf(coords = c("lon_new", "lat_new"), crs = 4326) %>% 
+    # Flag points which fall within the city limits
+    mutate(intersects = st_intersects(x = geometry,  y = sf_city_limits, sparse = FALSE)[1,],
+           # If any point is outside city limits, revert to initial coordinates
+           lon_fix = case_when(!intersects ~ lon, TRUE ~ lon_fix),
+           lat_fix = case_when(!intersects ~ lat, TRUE ~ lat_fix)) %>% 
+    # Convert back to tibble
+    as_tibble() %>% 
+    # Remove temp vars
+    select(point_index, lon_fix, lat_fix) %>% 
+    # Switch back to matrix form
+    pivot_longer(cols = -point_index, names_to = c("coord"), 
+                 names_pattern = "(.*)_fix", values_to = "value") %>% 
+    # Index the coords
+    mutate(coord = factor(x = coord, levels = c("lon", "lat"))) %>% 
+    # Arrange
+    arrange(point_index, coord) %>% 
+    # Recode indices
+    mutate(point_index = row_number()) %>% 
+    # Remove field
+    select(value) %>% 
+    # Convert to vector
+    unlist(use.names = FALSE)
+    
+  # print("Population Mutation operation completed!")
+  return(vec_mutant)
+}
+
+# Function to store population and fitness at each iteration ----------------
+fx_ga_save_popn <- function(obj_ga){
+  # Update global list
+  assign(x = "global_popn_fitness", 
+         value = list(popn = obj_ga@population, fitness = obj_ga@fitness), 
+         envir = globalenv())
+  
+  return(obj_ga)
+}
+
+# Create GA function ------------------------------------------
+# Set bounds
+vec_bounds <- sf_bbox %>% 
+  st_coordinates() %>% 
+  as_tibble() %>% 
+  mutate(grp = 1) %>% 
+  summarise(min_x = min(X), max_x = max(X), min_y = min(Y), max_y = max(Y)) %>% 
+  unlist()
+# Set population size
+popSize <- 200
+# Set system parameters
+param_n_station <- 20
+param_sd_sat_dist <- 600
+# Define list to store population matrix and fitness vectors
+global_popn_fitness <- list(popn = NULL, fitness = NULL)
+
+# Create GA object
+t0 <- Sys.time()
+print(t0)
+obj_ga_station <- GA::ga(type = "real-valued", 
+                         lower = rep(x = c(vec_bounds["min_x"], vec_bounds["min_y"]), 
+                                     times = param_n_station) %>% unname(), 
+                         upper = rep(x = c(vec_bounds["max_x"], vec_bounds["max_y"]), 
+                                     times = param_n_station) %>% unname(), 
+                         fitness = fx_ga_fitness, 
+                         population = fx_ga_init_popn, 
+                         selection = fx_ga_select_popn, 
+                         crossover = function(...) fx_ga_crossover_popn(..., 
+                                                                        p_cross_subset = 0.5),
+                         mutation = function(...) fx_ga_mutate_popn(..., 
+                                                                    std_mutation_shift = 0.1, 
+                                                                    p_mutation_subset = 0.2),
+                         popSize = popSize, 
+                         pcrossover = 0.7,
+                         pmutation = 0.03,
+                         elitism = max(1, round(popSize * 0.03)), 
+                         maxiter = 200,
+                         # postFitness = fx_ga_save_popn,
+                         run = 30, 
+                         monitor = TRUE)
+print(difftime(time1 = Sys.time(), time2 = t0))
+# Save to disk
+write_rds(x = obj_ga_station, file = "obj_ga_station.rds")
 
 
 ggplot() + 
