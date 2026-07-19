@@ -740,7 +740,7 @@ fx_ga_select_popn <- function(obj_ga){
   return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
 }
 
-# Function to implement mutation --------------------------
+# Function for CrossOver --------------------------
 fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
   # mtx_popn = mtx_popn_sample
   # parent_indices = matrix(data = c(1, 3), nrow = 2)
@@ -806,7 +806,7 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
               fitness = c(NA_real_, NA_real_)))
 }
 
-# Function to implement mutation ----------------------------------
+# Function for Mutation ----------------------------------
 fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutation_subset){
   # mtx_popn = mtx_popn_sample
   # parent_index = c(2)
@@ -1321,29 +1321,138 @@ fx_ga_crossover_popn <- function(obj_ga, parent_indices){
     # Convert to matrix
     as.matrix()
   
+  # Check if new individuals are still connected
+  # Parent 1
+  sc_connected_m <- mtx_children[1,] %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Fetch point geometries
+    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+    st_as_sf(crs = 4326) %>% 
+    select(-station_id) %>% 
+    # Create line segments between each point and next, grouped by line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>% 
+    ungroup() %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    st_cast(to = "LINESTRING") %>% 
+    # Remove helper
+    select(-next_point) %>% 
+    # Convert to sf network object
+    as_sfnetwork(directed = FALSE) %>% 
+    # Check for connectedness
+    igraph::is_connected(mode = "weak")
+  # Parent 2
+  sc_connected_f <- mtx_children[2,] %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Fetch point geometries
+    left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+    st_as_sf(crs = 4326) %>% 
+    select(-station_id) %>% 
+    # Create line segments between each point and next, grouped by line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>% 
+    ungroup() %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    st_cast(to = "LINESTRING") %>% 
+    # Remove helper
+    select(-next_point) %>% 
+    # Convert to sf network object
+    as_sfnetwork(directed = FALSE) %>% 
+    # Check for connectedness
+    igraph::is_connected(mode = "weak")
+  
+  # Define list to return based on connectedness
+  if(sc_connected_m & sc_connected_f){
+    # If new netwroks are connected, return the children
+    list_return <- list(children = mtx_children, fitness = c(NA_real_, NA_real_))
+  } else {
+    # If not connected, return the parents
+    list_return <- list(children = mtx_popn[parent_indices, ], 
+                        fitness = c(obj_ga@fitness[parent_indices,]))
+  }
+  
   # print("Population Crossover operation completed!")
-  return(list(children = mtx_children,
-              fitness = c(NA_real_, NA_real_)))
+  return(list_return)
 }
 
 # Function to implement mutation ----------------------------------
-fx_ga_mutate_popn <- function(obj_ga, parent_index, std_mutation_shift, p_mutation_subset){
-  # mtx_popn = mtx_popn_sample
-  # parent_index = c(2)
-  # std_mutation_shift = 0.1
-  # p_mutation_subset = 0.5
+fx_ga_mutate_popn <- function(obj_ga, vec_parent){
+  # vec_parent = mtx_popn[4,]
   # print("Population Mutation operation started ...")
-  # Extract population matrix from GA object
-  mtx_popn <- obj_ga@population
-  # Define shifts in coordinates needed 
-  dist_lat <- std_mutation_shift / 111.321
-  dist_lon <- std_mutation_shift / (111.321 * cos(st_centroid(x = sf_bbox) %>% 
-                                                   st_coordinates %>% 
-                                                   `[`(2) * pi/180))
+  # 6 different mutations can occur. Select a number randomly to decide which to implement
+  # 1: Exchange of the position of two stations in a line
+  # 2: Order reversal of subset of stations for a line
+  # 3: Exchange of a pair of stations between 2 lines
+  # 4: Transfer of a station from one line to another
+  # 5: Deletion of a station from a line
+  # 6: Addition of randomly selected station to a line
+  sc_select_mutation <- sample(x = 1:6, size = 1, replace = FALSE)
+  
+  # Create tibble of individual
+  table_mutant <- vec_parent %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Assign station indices
+    group_by(line_id) %>% 
+    mutate(index = row_number()) %>% 
+    ungroup()
+  
+  # Check which mutation to applu
+  if(sc_select_mutation == 1){
+    # Select which line to apply mutation to
+    sc_line_select <- sample(x = 1:param_n_line, size = 1)
+    # Select two positions on that line to exchange
+    sc_position_exchange <- sample(x = table_mutant %>% 
+                                     filter(line_id == sc_line_select) %>% 
+                                     `$`(index), 
+                                   size = 2, replace = FALSE) %>% 
+      # Convert to tibble for easier join
+      tibble(curr_order = ., revr_order = rev(.), line_id = sc_line_select) %>% 
+      # join to curr table
+      left_join(y = table_mutant, by = c("line_id", "revr_order" = "index")) %>% 
+      select(-revr_order)
+    # Create mutant vector
+    vec_mutant <- table_mutant %>% 
+      # Fetch new station ids
+      left_join(y = sc_position_exchange, 
+                by = c("line_id", "index" = "curr_order"), 
+                suffix = c("", "_new")) %>% 
+      # Replace original with new
+      mutate(station_id = case_when(is.na(station_id_new) ~ station_id,
+                                    TRUE ~ station_id_new)) %>% 
+      select(-station_id_new) %>% 
+      # Create new rows to have equal number of rows for each line
+      complete(line_id, index = 1:param_n_station, 
+               fill = list(station_id = 0)) %>% 
+      # Final vector
+      select(station_id) %>% 
+      unlist(use.names = FALSE)
+  } else if(sc_select_mutation == 2){
+    
+  }
   
   # Create tibble of coordinate points
-  vec_mutant <- mtx_popn %>% 
-    `[`(parent_index, ) %>% 
+  vec_mutant <- vec_parent %>% 
     # Convert to tibble
     as_tibble_col() %>% 
     # Recode values
