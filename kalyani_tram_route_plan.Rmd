@@ -1398,10 +1398,10 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
   # 6 different mutations can occur. Select a number randomly to decide which to implement
   # 1: Exchange of the position of two stations in a line
   # 2: Order reversal of subset of stations for a line
-  # 3: Exchange of a pair of stations between 2 lines
-  # 4: Transfer of a station from one line to another
-  # 5: Deletion of a station from a line
-  # 6: Addition of randomly selected station to a line
+  # 3: Deletion of a station from a line
+  # 4: Addition of randomly selected station to a line
+  # 5: Exchange of a pair of stations between 2 lines
+  # 6: Transfer of a station from one line to another
   sc_select_mutation <- sample(x = 1:6, size = 1, replace = FALSE)
   
   # Create tibble of individual
@@ -1417,7 +1417,8 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
     mutate(index = row_number()) %>% 
     ungroup()
   
-  # Check which mutation to applu
+  # Check which mutation to apply
+  # Mutation 1
   if(sc_select_mutation == 1){
     # Select which line to apply mutation to
     sc_line_select <- sample(x = 1:param_n_line, size = 1)
@@ -1448,7 +1449,9 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
       select(station_id) %>% 
       unlist(use.names = FALSE)
     
-  } else if(sc_select_mutation == 2){
+  } 
+  # Mutation 2
+  else if(sc_select_mutation == 2){
     # Select which line to apply mutation to
     sc_line_select <- sample(x = 1:param_n_line, size = 1)
     # Select size of station subset
@@ -1482,6 +1485,34 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
       # Final vector
       select(station_id) %>% 
       unlist(use.names = FALSE)
+  } 
+  # Mutation 3
+  else if(sc_select_mutation == 3){
+    # Select which line to apply mutation to
+    sc_line_select <- sample(x = 1:param_n_line, size = 1)
+    # Select two positions on that line to exchange
+    sc_position_remove <- sample(x = table_mutant %>% 
+                                     filter(line_id == sc_line_select) %>% 
+                                     `$`(index), 
+                                   size = 1, replace = FALSE)
+    # Create mutant vector
+    vec_mutant <- table_mutant %>% 
+      # Remove the station at selected position of selected line
+      filter(!(line_id == sc_line_select & index == sc_position_remove)) %>% 
+      # Recode indices
+      group_by(line_id) %>% 
+      mutate(index = row_number()) %>% 
+      ungroup() %>% 
+      # Create new rows to have equal number of rows for each line
+      complete(line_id, index = 1:param_n_station, 
+               fill = list(station_id = 0)) %>% 
+      # Final vector
+      select(station_id) %>% 
+      unlist(use.names = FALSE)
+  }
+  # Mutation 4
+  else if(sc_select_mutation == 3){
+    
   }
   
   # Create tibble of coordinate points
