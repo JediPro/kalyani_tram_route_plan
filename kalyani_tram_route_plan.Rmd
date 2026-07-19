@@ -1685,16 +1685,6 @@ fx_ga_mutate_popn <- function(obj_ga, vec_parent){
   return(vec_mutant)
 }
 
-# Function to store population and fitness at each iteration ----------------
-fx_ga_save_popn <- function(obj_ga){
-  # Update global list
-  assign(x = "global_popn_fitness", 
-         value = list(popn = obj_ga@population, fitness = obj_ga@fitness), 
-         envir = globalenv())
-  
-  return(obj_ga)
-}
-
 # Create GA function ------------------------------------------
 # Set bounds
 vec_bounds <- sf_bbox %>% 
