@@ -1718,7 +1718,7 @@ obj_ga_lines <- GA::ga(type = "real-valued",
                          pmutation = 0.1,
                          elitism = max(1, round(popSize * 0.03)), 
                          maxiter = 1000,
-                         run = 50, 
+                         run = 100, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
 # Save to disk
