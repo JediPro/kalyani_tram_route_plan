@@ -1159,7 +1159,23 @@ fx_check_connected <- function(vec_layout){
     # Check for connectedness
     igraph::is_connected(mode = "weak")
   
-  return(sc_complete & sc_connected)
+  # Check for loops, by checking if one station occurs more than once in each line
+  sc_non_loop <- vec_layout %>% 
+    # Store as tibble
+    tibble(station_id = .) %>% 
+    # Assign row numbers
+    mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+    # remove rows which have 0s
+    filter(station_id != 0) %>% 
+    # Count number of occurrence of each station
+    group_by(line_id, station_id) %>% 
+    mutate(n_occur = n()) %>% 
+    ungroup() %>% 
+    select(n_occur) %>% 
+    max() %>% 
+    `==` (1)
+    
+  return(sc_complete & sc_connected & sc_non_loop)
 }
 
 # Function to create line topology, ensuring a station belongs to atleast one line ----------------------
@@ -1209,19 +1225,19 @@ fx_generate_line_layout <- function(){
 # 1 row for each line in each individual
 # mtx_popn_sample <- tibble(indiv_index = 1:10) %>%
 #   # Create individual line layouts
-#   mutate(line = map(.x = indiv_index, 
-#                     .f = function(x){fx_generate_line_layout()})) %>% 
-#   unnest(cols = line) %>% 
+#   mutate(line = map(.x = indiv_index,
+#                     .f = function(x){fx_generate_line_layout()})) %>%
+#   unnest(cols = line) %>%
 #   # Remove unwanted column
-#   select(-c(line_id)) %>% 
+#   select(-c(line_id)) %>%
 #   # Assign column names
 #   group_by(indiv_index) %>%
 #   mutate(col_name = row_number()) %>%
 #   ungroup() %>%
 #   # Combine line station vectors into one vector
-#   pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>% 
+#   pivot_wider(id_cols = indiv_index, names_from = col_name, values_from = station_id) %>%
 #   # Stores as matrix
-#   select(-indiv_index) %>% 
+#   select(-indiv_index) %>%
 #   as.matrix() %>%
 #   # Only keep rows which form a connected network
 #   (function(mtx) mtx[apply(X = mtx, MARGIN = 1, FUN = fx_check_connected), ])
@@ -1689,7 +1705,7 @@ popSize <- 200
 # Create GA object
 t0 <- Sys.time()
 print(t0)
-obj_ga_station <- GA::ga(type = "real-valued", 
+obj_ga_lines <- GA::ga(type = "real-valued", 
                          lower = rep(x = 0, times = param_n_station * param_n_line),
                          upper = rep(x = 20, times = param_n_station * param_n_line),
                          fitness = fx_ga_fitness, 
@@ -1706,7 +1722,100 @@ obj_ga_station <- GA::ga(type = "real-valued",
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
 # Save to disk
-write_rds(x = obj_ga_station, file = "obj_ga_lines.rds")
+write_rds(x = obj_ga_lines, file = "obj_ga_lines.rds")
+```
 
+```{r Visualize Entire Network}
+# Load stations and network --------------------------
+obj_ga_station <- read_rds(file = "obj_ga_station.rds")
+obj_ga_lines <- read_rds(file = "obj_ga_lines.rds")
+
+# Create sf object of station locations -------------------
+sf_soln_stations <- obj_ga_station@solution[1,] %>% 
+  matrix(ncol = 2, byrow = TRUE) %>% 
+  # Convert to tibble
+  as_tibble(.name_repair = "unique_quiet") %>%
+  rename(lon = 1, lat = 2) %>% 
+  # Convert to sf
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  mutate(id = row_number())
+
+# Set parameters --------------
+param_n_line <- 2
+param_n_station <- max(sf_soln_stations$id)
+
+# Create network object ----------------------
+sf_soln_network <- obj_ga_lines@solution[1,] %>% 
+  # Store as tibble
+  tibble(station_id = .) %>% 
+  # Assign row numbers
+  mutate(line_id = ceiling(row_number() / param_n_station)) %>% 
+  # remove rows which have 0s
+  filter(station_id != 0) %>% 
+  # Fetch point geometries
+  left_join(y = sf_soln_stations, by = c("station_id" = "id")) %>% 
+  st_as_sf(crs = 4326) %>% 
+  select(-station_id) %>% 
+  # Create line segments between each point and next, grouped by line
+  group_by(line_id) %>% 
+  mutate(next_point = lead(geometry)) %>% 
+  ungroup() %>% 
+  # Remove row where next point is NA
+  filter(!st_is_empty(next_point)) %>% 
+  rowwise() %>% 
+  mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+  st_cast(to = "LINESTRING") %>% 
+  # Remove helper
+  select(-next_point) %>% 
+  # Convert to sf network object
+  as_sfnetwork(directed = FALSE) %>% 
+  # Fetch Station IDs, since sfnetwork shuffles order
+  activate(nodes) %>%
+  st_join(y = sf_soln_stations) %>% 
+  arrange(id)
+
+# Plot final solution -------------------------------
+plot_network <- ggplot() +
+  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  geom_sf(data = sf_city_road) +
+  geom_sf(data = sf_demand_point, size = 2, colour = "red") +
+  # Plot stations
+  geom_sf(data = st_as_sf(sf_soln_network, "nodes"), 
+          size = 4, colour = "hotpink") +
+  # plot lines
+  geom_sf(data = st_as_sf(sf_soln_network, "edges"), alpha = 0.8,
+          mapping = aes(colour = as.character(line_id)), size = 2) +
+  # label the stations
+  geom_sf_text(data = st_as_sf(sf_soln_network, "nodes"), 
+               mapping = aes(label = id),
+               size = 10, colour = "gold") +
+  # Scales
+  scale_fill_viridis_b(name = "Population", na.value = "transparent", guide = NULL) +
+  scale_colour_manual(breaks = c("1", "2"), values = c("orange", "cyan"), 
+                      name = NULL) +
+  theme_vaw_light() +
+  theme(panel.grid.major = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank(),
+        legend.key.height = unit(7, "mm"),
+        legend.position = "inside",
+        legend.direction = "vertical",
+        legend.position.inside = c(0.9, 0.5))
+
+# Plot trend of fit --------------------------------
+# Convergence happens in 200 iterations
+obj_ga_station@summary %>% 
+  as_tibble() %>% 
+  mutate(iter = row_number()) %>% 
+  # long form
+  pivot_longer(cols = -iter, names_to = "metric", values_to = "value") %>% 
+  filter(metric %in% c("max", "mean", "median")) %>% 
+  # plot
+  ggplot() +
+  geom_line(mapping = aes(x = iter, y = value, group = metric, colour = metric),
+            linewidth = 1, alpha = 0.8) +
+  scale_color_brewer(type = "qual", palette = "Set1") +
+  theme_vaw_light()
 ```
 
