@@ -1805,7 +1805,7 @@ plot_network <- ggplot() +
 
 # Plot trend of fit --------------------------------
 # Convergence happens in 200 iterations
-obj_ga_station@summary %>% 
+obj_ga_lines@summary %>% 
   as_tibble() %>% 
   mutate(iter = row_number()) %>% 
   # long form
