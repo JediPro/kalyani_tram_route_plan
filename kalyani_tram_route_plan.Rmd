@@ -16,6 +16,7 @@ options(warn = 1)
 library(tidyverse)
 library(osmdata)
 library(sf)
+library(tidygraph)
 library(sfnetworks)
 
 # Set working directory
@@ -450,15 +451,14 @@ sf_bbox <- st_bbox(sf_city_limits) %>%
   st_as_sfc(crs = st_crs(sf_city_limits))
 
 # Fetch road network of city --------------------------
-# Get main roads
-# feat_major_road <- opq(bbox = sf_bbox, timeout = 100) %>%
-#   add_osm_feature(key = "highway",
-#                   value = c("motorway", "motorway_link",
-#                             "trunk", "trunk_link",
-#                             "primary", "primary_link",
-#                             "secondary", "secondary_link",
-#                             "tertiary", "tertiary_link")) %>%
-#   osmdata_sf()
+feat_major_road <- opq(bbox = sf_bbox, timeout = 100) %>%
+  add_osm_feature(key = "highway",
+                  value = c("motorway", "motorway_link",
+                            "trunk", "trunk_link",
+                            "primary", "primary_link",
+                            "secondary", "secondary_link",
+                            "tertiary", "tertiary_link")) %>%
+  osmdata_sf()
 # Save
 # write_rds(x = feat_major_road, file = "kalyani_road.rds")
 feat_major_road <- read_rds(file = "kalyani_road.rds")
@@ -470,7 +470,7 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
                             select(osm_id, highway) %>% 
                             st_cast(to = "LINESTRING")) %>% 
   # Keep only major road
-  filter(highway %in% c("motorway", "motorway_link", "trunk", "trunk_link",
+  filter(highway %in% c("trunk", "trunk_link",
                         "primary", "primary_link", "secondary", "secondary_link",
                         "tertiary", "tertiary_link")) %>% 
   # Truncate roads to stay within bounding box
@@ -478,7 +478,11 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   select(-Name, -Description) %>% 
   # Recode types
   mutate(highway = str_replace(string = highway, 
-                               pattern = "_link", replacement = ""))
+                               pattern = "_link", replacement = "")) %>% 
+  # Remove some of the lines
+  filter(!(osm_id %in% c(1030027395, 1005463896, 1005463897, 
+                         1154503276, 1053022552, 1046463949,
+                         145535309)))
 
 # Load Population raster ------------------------------
 rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif") %>% 
@@ -1832,8 +1836,61 @@ obj_ga_lines@summary %>%
 ```{r Get road network}
 ggplot() + 
   # geom_sf(data = sf_city_limits, fill = NA, colour = "black", linewidth = 2) +
-  geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway)) +
-  scale_color_brewer(palette = "Set1")
+  geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway),
+          linewidth = 1) +
+  # geom_sf_label(data = sf_city_road, aes(label = osm_id), font = "Titillium Web") +
+  scale_color_brewer(palette = "Set1") +
+  theme_vaw_light() +
+  theme(panel.grid.major = element_blank(), axis.text = element_blank(), 
+        axis.ticks = element_blank())
+
+# Function to create 2-point line segments, to help break up each line into most granular subsegments
+fx_create_line_segments <- function(geom){
+  # sf_line <- sfnet_road %>% filter(osm_id == 145535309) %>% select(geometry)
+  
+  sf_line_segments <- sf_line %>% 
+    # Remove osm tag
+    st_cast(to = "POINT") %>% 
+    # Fetch next point
+    mutate(next_point = lead(geometry)) %>% 
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>% 
+    rowwise() %>% 
+    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+    select(-next_point) %>% 
+    st_cast(to = "LINESTRING")
+  
+  return(sf_line_segments)
+}
+
+# Function to calculate clusters for any SF point object ----------------------
+fx_dbscan <- function(sf_points, eps){
+  # sf_points <- sfnet_road %>% st_as_sf("nodes")
+
+  # Extract coordinates
+  mtx_coords <- sf_points %>%
+    # Transform to mollweide coordinates to be able to set parameters in meters
+    st_transform(crs = "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m") %>%
+    # Fetch coordinate matrix
+    st_coordinates()
+
+  # Fetch clusters
+  vec_cluster <- dbscan::dbscan(x = mtx_coords, eps = eps, minPts = 1)$cluster
+
+  # Bind to object
+  return(sf_points %>% mutate(cluster = vec_cluster))
+}
+
+for (i in 1:nrow(sfnet_road)) {
+  tryCatch({
+    if (sfnet_road$dup[i] == 2) {
+      temp <- st_reverse(sfnet_road$geometry[i])
+    }
+  }, error = function(e) {
+    cat("Error found at row:", i, "\n")
+    print(e)
+  })
+}
 
 # Process Road Network ---------------------------------------
 t0 <- Sys.time()
@@ -1843,26 +1900,24 @@ sfnet_road <- sf_city_road %>%
   st_cast(to = "LINESTRING") %>%
   # Round precision to 4 decimals
   st_set_geometry(value = st_geometry(.) %>%
-                    lapply(FUN = function(x) round(x, 4)) %>%
+                    lapply(FUN = function(x) round(x, 5)) %>%
                     st_sfc(crs = st_crs(x = sf_city_road))) %>%
+  # Split each line into subsegments at each existing vertex
+  # rename(geom_old = geometry) %>% 
+  # mutate(geom_new = map(.x = geom_old, .f = fx_create_line_segments, 
+  #                       .progress = TRUE)) %>% 
+  # unnest(cols = geom_new) %>% 
+  # # Remove old geom
+  # select(-geom_old) %>% 
   # Set speeds
   mutate(speed = recode_values(x = highway,
-                               "motorway" ~ 45L,
-                               "trunk" ~ 45L,
-                               "primary" ~ 36L,
-                               "secondary" ~ 27L,
-                               "tertiary" ~ 18L)) %>%
-  # Unnest
-  unnest(dup) %>%
-  # Reverse the geometry of the duplicated ways
-  # Case When throws an error, probably due to crs mismatches
-  (function(df) bind_rows(df %>% filter(dup == 1),
-                          df %>% filter(dup == 2) %>% st_reverse())) %>%
+                               "motorway" ~ 45L, "trunk" ~ 45L, "primary" ~ 36L,
+                               "secondary" ~ 27L, "tertiary" ~ 18L)) %>%
   # Keep only geometries
   select(speed) %>%
   # Convert to SF NETWORK
   # Keep as non-directed to keep number of edges to minimum
-  as_sfnetwork(directed = TRUE) %>%
+  as_sfnetwork(directed = FALSE) %>%
   # Subdivide edges at locations which are interior points to more than one edge
   convert(.f = to_spatial_subdivision, .clean = TRUE) %>%
   # Group components
@@ -1884,7 +1939,7 @@ sfnet_road <- sf_city_road %>%
   # Contract network by replacing clustered notes with centroids
   activate(nodes) %>%
   # Apply function
-  fx_dbscan(eps = 25) %>%
+  fx_dbscan(eps = 50) %>%
   # Find the components again, so that only points in the same network are amalgamated
   mutate(component = group_components()) %>%
   # Contract network
@@ -1904,5 +1959,9 @@ difftime(time1 = Sys.time(), time2 = t0)
 write_rds(x = sfnet_road, file = "sfnet_road.rds")
 sfnet_road <- read_rds(file = "sfnet_road.rds")
 
+
+ggplot() + 
+  geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
+  geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink")
 ```
 
