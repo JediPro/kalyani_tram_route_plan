@@ -451,17 +451,30 @@ sf_bbox <- st_bbox(sf_city_limits) %>%
   st_as_sfc(crs = st_crs(sf_city_limits))
 
 # Fetch road network of city --------------------------
-feat_major_road <- opq(bbox = sf_bbox, timeout = 100) %>%
-  add_osm_feature(key = "highway",
-                  value = c("motorway", "motorway_link",
-                            "trunk", "trunk_link",
-                            "primary", "primary_link",
-                            "secondary", "secondary_link",
-                            "tertiary", "tertiary_link")) %>%
-  osmdata_sf()
+# feat_major_road <- opq(bbox = sf_bbox, timeout = 100) %>%
+#   add_osm_feature(key = "highway",
+#                   value = c("motorway", "motorway_link",
+#                             "trunk", "trunk_link",
+#                             "primary", "primary_link",
+#                             "secondary", "secondary_link",
+#                             "tertiary", "tertiary_link")) %>%
+#   osmdata_sf()
 # Save
 # write_rds(x = feat_major_road, file = "kalyani_road.rds")
 feat_major_road <- read_rds(file = "kalyani_road.rds")
+
+# Convert to UTM Coordinates to be able to express distances in metres ---------
+fx_get_utm_epsg <- function(sf_obj) {
+  centroid <- st_centroid(st_union(sf_obj))
+  coords <- st_coordinates(centroid)
+  
+  lon <- coords[1]
+  lat <- coords[2]
+  
+  zone <- floor((lon + 180) / 6) + 1
+  epsg <- ifelse(lat >= 0, 32600 + zone, 32700 + zone)
+  return(epsg)
+}
 
 # Create sf object combining lines and polygons ----------------------------
 sf_city_road <- bind_rows(feat_major_road$osm_lines %>% 
@@ -476,6 +489,8 @@ sf_city_road <- bind_rows(feat_major_road$osm_lines %>%
   # Truncate roads to stay within bounding box
   st_intersection(y = sf_city_limits) %>% 
   select(-Name, -Description) %>% 
+  # Change CRS
+  st_transform(crs = fx_get_utm_epsg(sf_obj = .)) %>% 
   # Recode types
   mutate(highway = str_replace(string = highway, 
                                pattern = "_link", replacement = "")) %>% 
@@ -501,7 +516,8 @@ rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif
 # terra::writeRaster(x = rs_popn, filename = "raster_city_popn.tif", overwrite = TRUE)
 
 # Convert raster to sf -----------------------------
-sf_popn <- rs_popn %>% terra::as.points() %>% st_as_sf()
+sf_popn <- rs_popn %>% terra::as.points() %>% st_as_sf() %>% 
+  st_transform(crs = fx_get_utm_epsg(sf_obj = .))
 
 # # Load built up surface raster ------------------------------
 # # To be used as proxy for population, since is has higher resolution
@@ -552,7 +568,8 @@ sf_demand_point <- tribble(
     "Bidhan Girls School", 1000, 22.97827, 88.42866,
     "Julien Day School", 1000, 22.96361, 88.45992) %>% 
   # Convert to sf
-  st_as_sf(coords = c("lon", "lat"), crs = st_crs(sf_bbox))
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_transform(crs = fx_get_utm_epsg(.))
 
 # Store total population to serve --------------------------
 sc_total_demand <- sum(sf_popn$popn) + sum(sf_demand_point$demand)
@@ -1834,49 +1851,39 @@ obj_ga_lines@summary %>%
 
 ## Workflow for Network Following Roads
 ```{r Get road network}
-# Convert to UTM Coordinates to be able to express distances in metres ---------
-fx_get_utm_epsg <- function(sf_obj) {
-  centroid <- st_centroid(st_union(sf_obj))
-  coords <- st_coordinates(centroid)
-  
-  lon <- coords[1]
-  lat <- coords[2]
-  
-  zone <- floor((lon + 180) / 6) + 1
-  epsg <- ifelse(lat >= 0, 32600 + zone, 32700 + zone)
-  return(epsg)
-}
-
-sf_city_road <- st_transform(x = sf_city_road, crs = fx_get_utm_epsg(sf_city_road))
 
 ggplot() + 
   # geom_sf(data = sf_city_limits, fill = NA, colour = "black", linewidth = 2) +
   geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway),
           linewidth = 1) +
-  # geom_sf_label(data = sf_city_road, aes(label = osm_id), font = "Titillium Web") +
+  geom_sf(data = sf_demand_point, size = 2, colour = "hotpink") +
   scale_color_brewer(palette = "Set1") +
   theme_vaw_light() +
   theme(panel.grid.major = element_blank(), axis.text = element_blank(), 
         axis.ticks = element_blank())
 
-# # Function to create 2-point line segments, to help break up each line into most granular subsegments
-# fx_create_line_segments <- function(geom){
-#   # sf_line <- sfnet_road %>% filter(osm_id == 145535309) %>% select(geometry)
-#   
-#   sf_line_segments <- sf_line %>% 
-#     # Remove osm tag
-#     st_cast(to = "POINT") %>% 
-#     # Fetch next point
-#     mutate(next_point = lead(geometry)) %>% 
-#     # Remove row where next point is NA
-#     filter(!st_is_empty(next_point)) %>% 
-#     rowwise() %>% 
-#     mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-#     select(-next_point) %>% 
-#     st_cast(to = "LINESTRING")
-#   
-#   return(sf_line_segments)
-# }
+# Function to create 2-point line segments, to help break up each line into most granular subsegments
+fx_create_line_segments <- function(sf_line){
+  # sf_line <- sfnet_road$
+
+  sf_line_segments <- sf_line %>% 
+    # Set line id
+    mutate(line_id = row_number()) %>% 
+    # Remove osm tag
+    st_cast(to = "POINT") %>%
+    # Fetch next point for each line
+    group_by(line_id) %>% 
+    mutate(next_point = lead(geometry)) %>%
+    # Remove row where next point is NA
+    filter(!st_is_empty(next_point)) %>%
+    rowwise() %>%
+    mutate(geometry = st_combine(c(geometry, next_point))) %>%
+    select(-next_point) %>%
+    st_cast(to = "LINESTRING") %>% 
+    ungroup()
+
+  return(sf_line_segments)
+}
 
 # Function to calculate clusters for any SF point object ----------------------
 fx_dbscan <- function(sf_points, eps){
@@ -1906,13 +1913,6 @@ sfnet_road <- sf_city_road %>%
   st_set_geometry(value = st_geometry(.) %>%
                     lapply(FUN = function(x) round(x, 5)) %>%
                     st_sfc(crs = st_crs(x = sf_city_road))) %>%
-  # Split each line into subsegments at each existing vertex
-  # rename(geom_old = geometry) %>% 
-  # mutate(geom_new = map(.x = geom_old, .f = fx_create_line_segments, 
-  #                       .progress = TRUE)) %>% 
-  # unnest(cols = geom_new) %>% 
-  # # Remove old geom
-  # select(-geom_old) %>% 
   # Set speeds
   mutate(speed = recode_values(x = highway,
                                "motorway" ~ 45L, "trunk" ~ 45L, "primary" ~ 36L,
@@ -1958,26 +1958,39 @@ sfnet_road <- sf_city_road %>%
   activate(edges) %>%
   # Arrange in ascending order
   arrange(edge_length()) %>%
-  filter(!(is.na(edge_is_loop()) | is.na(edge_is_multiple())))
-#   # Create new vertices every 250 metres
-#   mutate(line_id = row_number(),
-#          geometry  = st_segmentize(x = geometry, dfMaxLength = 10)) %>% 
-#   # Create network nodes along the new vertices
-#   convert(.f = to_spatial_subdivision) %>% 
-#   # Calculate new edge lnegths
-#   mutate(edge_dist = edge_length() %>% as.numeric()) %>% 
-#   # Recalculate times
-#   group_by(line_id) %>% 
-#   mutate(edge_time = (edge_dist * edge_time/sum(edge_dist))) %>% 
-#   ungroup()
-#   # Add points every 500 meters
-# difftime(time1 = Sys.time(), time2 = t0)
+  filter(!(is.na(edge_is_loop()) | is.na(edge_is_multiple()))) %>% 
+  # Simplify the line geometries, to make line straighter
+  st_simplify(preserveTopology = TRUE, dTolerance = 10) %>% 
+  # Extract lines
+  st_as_sf() %>% 
+  # Segmentize each line every 500 mteres
+  st_segmentize(dfMaxLength = 500) %>% 
+  # Convert each internal vertex to a node, so that they show up in the network
+  fx_create_line_segments() %>% 
+  # Convert to SF NETWORK
+  as_sfnetwork(directed = FALSE) %>% 
+  activate(edges) %>% 
+  # Since new line segments are created need to distribute travel times
+  mutate(edge_dist = edge_length() %>% as.numeric()) %>%
+  # Recalculate times
+  group_by(line_id) %>%
+  mutate(edge_time = (edge_dist * edge_time/sum(edge_dist))) %>%
+  ungroup() %>% 
+  # Set new line ids
+  select(-edge_dist) %>% 
+  mutate(line_id = row_number())
+difftime(time1 = Sys.time(), time2 = t0)
 # write_rds(x = sfnet_road, file = "sfnet_road_kly.rds")
 sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
 
 
+
 ggplot() + 
   geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
-  geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink")
+  geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink") +
+  # geom_sf_label(data = sfnet_road %>% activate(edges) %>% st_as_sf() %>% st_centroid(), mapping = aes(label = line_id)) +
+  theme_vaw_light()
+
+sfnet_road %>% activate(edges) %>% st_as_sf() %>% filter(line_id == 171)
 ```
 
