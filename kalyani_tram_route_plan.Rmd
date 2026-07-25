@@ -1834,6 +1834,21 @@ obj_ga_lines@summary %>%
 
 ## Workflow for Network Following Roads
 ```{r Get road network}
+# Convert to UTM Coordinates to be able to express distances in metres ---------
+fx_get_utm_epsg <- function(sf_obj) {
+  centroid <- st_centroid(st_union(sf_obj))
+  coords <- st_coordinates(centroid)
+  
+  lon <- coords[1]
+  lat <- coords[2]
+  
+  zone <- floor((lon + 180) / 6) + 1
+  epsg <- ifelse(lat >= 0, 32600 + zone, 32700 + zone)
+  return(epsg)
+}
+
+sf_city_road <- st_transform(x = sf_city_road, crs = fx_get_utm_epsg(sf_city_road))
+
 ggplot() + 
   # geom_sf(data = sf_city_limits, fill = NA, colour = "black", linewidth = 2) +
   geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway),
@@ -1844,24 +1859,24 @@ ggplot() +
   theme(panel.grid.major = element_blank(), axis.text = element_blank(), 
         axis.ticks = element_blank())
 
-# Function to create 2-point line segments, to help break up each line into most granular subsegments
-fx_create_line_segments <- function(geom){
-  # sf_line <- sfnet_road %>% filter(osm_id == 145535309) %>% select(geometry)
-  
-  sf_line_segments <- sf_line %>% 
-    # Remove osm tag
-    st_cast(to = "POINT") %>% 
-    # Fetch next point
-    mutate(next_point = lead(geometry)) %>% 
-    # Remove row where next point is NA
-    filter(!st_is_empty(next_point)) %>% 
-    rowwise() %>% 
-    mutate(geometry = st_combine(c(geometry, next_point))) %>% 
-    select(-next_point) %>% 
-    st_cast(to = "LINESTRING")
-  
-  return(sf_line_segments)
-}
+# # Function to create 2-point line segments, to help break up each line into most granular subsegments
+# fx_create_line_segments <- function(geom){
+#   # sf_line <- sfnet_road %>% filter(osm_id == 145535309) %>% select(geometry)
+#   
+#   sf_line_segments <- sf_line %>% 
+#     # Remove osm tag
+#     st_cast(to = "POINT") %>% 
+#     # Fetch next point
+#     mutate(next_point = lead(geometry)) %>% 
+#     # Remove row where next point is NA
+#     filter(!st_is_empty(next_point)) %>% 
+#     rowwise() %>% 
+#     mutate(geometry = st_combine(c(geometry, next_point))) %>% 
+#     select(-next_point) %>% 
+#     st_cast(to = "LINESTRING")
+#   
+#   return(sf_line_segments)
+# }
 
 # Function to calculate clusters for any SF point object ----------------------
 fx_dbscan <- function(sf_points, eps){
@@ -1879,17 +1894,6 @@ fx_dbscan <- function(sf_points, eps){
 
   # Bind to object
   return(sf_points %>% mutate(cluster = vec_cluster))
-}
-
-for (i in 1:nrow(sfnet_road)) {
-  tryCatch({
-    if (sfnet_road$dup[i] == 2) {
-      temp <- st_reverse(sfnet_road$geometry[i])
-    }
-  }, error = function(e) {
-    cat("Error found at row:", i, "\n")
-    print(e)
-  })
 }
 
 # Process Road Network ---------------------------------------
@@ -1955,9 +1959,21 @@ sfnet_road <- sf_city_road %>%
   # Arrange in ascending order
   arrange(edge_length()) %>%
   filter(!(is.na(edge_is_loop()) | is.na(edge_is_multiple())))
-difftime(time1 = Sys.time(), time2 = t0)
-write_rds(x = sfnet_road, file = "sfnet_road.rds")
-sfnet_road <- read_rds(file = "sfnet_road.rds")
+#   # Create new vertices every 250 metres
+#   mutate(line_id = row_number(),
+#          geometry  = st_segmentize(x = geometry, dfMaxLength = 10)) %>% 
+#   # Create network nodes along the new vertices
+#   convert(.f = to_spatial_subdivision) %>% 
+#   # Calculate new edge lnegths
+#   mutate(edge_dist = edge_length() %>% as.numeric()) %>% 
+#   # Recalculate times
+#   group_by(line_id) %>% 
+#   mutate(edge_time = (edge_dist * edge_time/sum(edge_dist))) %>% 
+#   ungroup()
+#   # Add points every 500 meters
+# difftime(time1 = Sys.time(), time2 = t0)
+# write_rds(x = sfnet_road, file = "sfnet_road_kly.rds")
+sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
 
 
 ggplot() + 
