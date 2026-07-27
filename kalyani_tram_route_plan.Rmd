@@ -1850,17 +1850,17 @@ obj_ga_lines@summary %>%
 
 
 ## Workflow for Network Following Roads
-```{r Get road network}
+```{r Create road network}
 
-ggplot() + 
-  # geom_sf(data = sf_city_limits, fill = NA, colour = "black", linewidth = 2) +
-  geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway),
-          linewidth = 1) +
-  geom_sf(data = sf_demand_point, size = 2, colour = "hotpink") +
-  scale_color_brewer(palette = "Set1") +
-  theme_vaw_light() +
-  theme(panel.grid.major = element_blank(), axis.text = element_blank(), 
-        axis.ticks = element_blank())
+# ggplot() + 
+#   # geom_sf(data = sf_city_limits, fill = NA, colour = "black", linewidth = 2) +
+#   geom_sf(data = sf_city_road, mapping = aes(colour = highway, fill = highway),
+#           linewidth = 1) +
+#   geom_sf(data = sf_demand_point, size = 2, colour = "hotpink") +
+#   scale_color_brewer(palette = "Set1") +
+#   theme_vaw_light() +
+#   theme(panel.grid.major = element_blank(), axis.text = element_blank(), 
+#         axis.ticks = element_blank())
 
 # Function to create 2-point line segments, to help break up each line into most granular subsegments
 fx_create_line_segments <- function(sf_line){
@@ -1983,14 +1983,19 @@ difftime(time1 = Sys.time(), time2 = t0)
 # write_rds(x = sfnet_road, file = "sfnet_road_kly.rds")
 sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
 
+# ggplot() + 
+#   geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
+#   geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink") +
+#   # geom_sf_label(data = sfnet_road %>% activate(edges) %>% st_as_sf() %>% st_centroid(), mapping = aes(label = line_id)) +
+#   theme_vaw_light()
 
+```
 
-ggplot() + 
-  geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
-  geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink") +
-  # geom_sf_label(data = sfnet_road %>% activate(edges) %>% st_as_sf() %>% st_centroid(), mapping = aes(label = line_id)) +
-  theme_vaw_light()
+```{r Optimize stop locations}
+# Decide number of bus stops -------------------------
+# Calculation 1: 1 bus stop per 1000 capita - Popn of 150000 gives us 150 stops
+# Calculation 2: 1 bus stop per 500 m of road network - Network of 64000 m gives us 128 stops
+# Final elected - 130
 
-sfnet_road %>% activate(edges) %>% st_as_sf() %>% filter(line_id == 171)
 ```
 
