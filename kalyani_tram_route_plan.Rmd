@@ -511,7 +511,9 @@ rs_popn <- terra::rast(x = "GHS_POP_E2025_GLOBE_R2023A_54009_100_V1_0_R7_C27.tif
   # Mask values outside city limits
   terra::mask(mask = sf_city_limits, inverse = FALSE, updatevalue = NA) %>% 
   # The high population area is incorrect, change values
-  tidyterra::mutate(popn = case_when(popn >= 270 ~ 100, TRUE ~ popn))
+  tidyterra::mutate(popn = case_when(popn >= 270 ~ 100, TRUE ~ popn)) %>% 
+  # Change projection
+  terra::project(y = st_crs(x = sf_city_road)$input)
 # Write to disk
 # terra::writeRaster(x = rs_popn, filename = "raster_city_popn.tif", overwrite = TRUE)
 
@@ -2230,7 +2232,7 @@ fx_ga_mutate_popn <- function(obj_ga, parent_index, p_mutation_subset){
 # Set population size
 popSize <- 500
 # Set system parameters
-param_n_station <- 130
+param_n_stop <- 75
 param_sd_sat_dist <- 500
 
 # Create GA object
@@ -2248,32 +2250,101 @@ obj_ga_bus_stop <- GA::ga(type = "real-valued",
                                                                     p_mutation_subset = 0.2),
                          popSize = popSize, 
                          pcrossover = 0.7,
-                         pmutation = 0.03,
+                         pmutation = 0.1,
                          elitism = max(1, round(popSize * 0.03)), 
                          maxiter = 1000,
-                         run = 100, 
+                         run = 200, 
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
 # Save to disk
 # write_rds(x = obj_ga_bus_stop, file = "obj_ga_bus_stop.rds")
+```
 
-# Visualize Stop Locations ----------------------------
+```{r Visualize Network}
+# Load Road Network -------------------
+sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
+# Extract Stop Location Universe
+sf_stop_universe <- sfnet_road %>% 
+  activate(nodes) %>% 
+  st_as_sf() %>% 
+  # Set index
+  mutate(stop_id = row_number())
+# LOad solution set
 obj_ga_bus_stop <- read_rds(file = "obj_ga_bus_stop.rds")
+# Convert to sf
 sf_soln_bus_stop <- obj_ga_bus_stop@solution[6,] %>% 
   # Convert to tibble
     tibble(stop_id = .) %>%
     # Map dtop locations
     inner_join(x = sf_stop_universe, y = ., by = "stop_id")
 
+# Load parameters
+param_n_station <- 130
+param_sd_sat_dist <- 500
+
+# Find population served at each station ----------------
+data_soln_stop_point_served <- sf_soln_bus_stop %>% 
+  # Calculate distance to each point point generator
+  st_distance(y = sf_demand_point, by_element = FALSE) %>% 
+  # Convert to matrix
+  as.matrix() %>% 
+  # Drop units due to matrix operations being hampered when sf is loaded
+  units::drop_units() %>% 
+  # Only keep values below threshold, defined by parameter
+  (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+  # Flag the closest station for each demand point
+  apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+  # Keep only 1s
+  (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+  # Multiply each with the corresponding demand
+  sweep(MARGIN = 2, sf_demand_point$demand, `*`) %>%
+  # Sum up demand handled by each station
+  rowSums(na.rm = TRUE) %>% 
+  # Convert to tibble
+  tibble(generator_popn_served = .)
+
+# Calculate resident population served
+data_soln_stop_popn_served <- sf_soln_bus_stop %>% 
+  # Calculate distance to all points in raster sf
+  st_distance(y = sf_popn, by_element = FALSE) %>% 
+  # Convert to matrix
+  as.matrix() %>% 
+  # Drop units due to matrix operations being hampered when sf is loaded
+  units::drop_units() %>% 
+  # Only keep values below threshold, defined by parameter
+  (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+  # Flag the closest station for each popn point
+  apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+  # Keep only 1s
+  (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+  # Multiply each with the corresponding demand
+  sweep(MARGIN = 2, sf_popn$popn, `*`) %>%
+  # ROund down to integer
+  {floor(.)} %>% 
+  # Sum up demand handled by each station
+  rowSums(na.rm = TRUE) %>% 
+  # Convert to tibble
+  tibble(popn_served = .) %>% 
+  # Map Point generator fields
+  bind_cols(data_soln_stop_point_served)
+
+# Total demand served
+sf_soln_bus_stop_demand_served <- sf_soln_bus_stop %>% 
+  bind_cols(data_soln_stop_popn_served)
+
+ggplot() + geom_density(data = sf_soln_bus_stop_demand_served, mapping = aes(x = popn_served))
+  
+
+# plot
 ggplot() +
-  geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
-  # geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink") +
-  geom_sf(data = sf_soln_bus_stop, size = 3, colour = "red") +
+  tidyterra::geom_spatraster(data = rs_popn, aes(fill = popn)) +
+  geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "turquoise1") +
+  geom_sf(data = sf_demand_point, size = 3, colour = "white") +
+  geom_sf(data = sf_soln_bus_stop_demand_served, 
+          mapping = aes(size = popn_served + generator_popn_served), colour = "maroon1") +
+  scale_fill_viridis_b(na.value = "transparent") +
+  scale_size_continuous(range = c(1, 8)) +
   theme_vaw_light()
-```
-
-```{r Visualize Stop Locations}
-
 
 ```
 
