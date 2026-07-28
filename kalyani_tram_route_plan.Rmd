@@ -2239,8 +2239,8 @@ param_sd_sat_dist <- 500
 t0 <- Sys.time()
 print(t0)
 obj_ga_bus_stop <- GA::ga(type = "real-valued", 
-                         lower = rep(x = 1, times = param_n_station),
-                         upper = rep(x = param_n_station, times = param_n_station),
+                         lower = rep(x = 1, times = param_n_stop),
+                         upper = rep(x = param_n_stop, times = param_n_stop),
                          fitness = fx_ga_fitness, 
                          population = fx_ga_init_popn, 
                          selection = fx_ga_select_popn, 
@@ -2279,7 +2279,7 @@ sf_soln_bus_stop <- obj_ga_bus_stop@solution[6,] %>%
     inner_join(x = sf_stop_universe, y = ., by = "stop_id")
 
 # Load parameters
-param_n_station <- 130
+param_n_stop <- 130
 param_sd_sat_dist <- 500
 
 # Find population served at each station ----------------
