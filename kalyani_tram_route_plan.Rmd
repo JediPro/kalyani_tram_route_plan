@@ -1847,8 +1847,6 @@ obj_ga_lines@summary %>%
   theme_vaw_light()
 ```
 
-
-
 ## Workflow for Network Following Roads
 ```{r Create road network}
 
@@ -1981,7 +1979,6 @@ sfnet_road <- sf_city_road %>%
   mutate(line_id = row_number())
 difftime(time1 = Sys.time(), time2 = t0)
 # write_rds(x = sfnet_road, file = "sfnet_road_kly.rds")
-sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
 
 # ggplot() + 
 #   geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
@@ -1996,6 +1993,287 @@ sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
 # Calculation 1: 1 bus stop per 1000 capita - Popn of 150000 gives us 150 stops
 # Calculation 2: 1 bus stop per 500 m of road network - Network of 64000 m gives us 128 stops
 # Final elected - 130
+
+# Extract universe of potential stop locations --------------------------
+sfnet_road <- read_rds(file = "sfnet_road_kly.rds")
+sf_stop_universe <- sfnet_road %>% 
+  activate(nodes) %>% 
+  st_as_sf() %>% 
+  # Set index
+  mutate(stop_id = row_number())
+
+# # Sample matrix --------------------------
+# mtx_popn_sample <- tibble(indiv_index = 1:10, 
+#                           stop_index = list(c(1:param_n_stop))) %>%
+#   unnest_longer(col = stop_index) %>% 
+#   # Assign column names
+#   group_by(indiv_index) %>%
+#   mutate(stop_id = sample(x = sf_stop_universe$stop_id, size = param_n_stop, 
+#                           replace = FALSE)) %>%
+#   ungroup() %>%
+#   # Wide form
+#   pivot_wider(id_cols = indiv_index, names_from = stop_index, values_from = stop_id) %>%
+#   # Convert to matrix
+#   select(-indiv_index) %>%
+#   as.matrix()
+
+# Function for fitness calculation --------------------
+fx_ga_fitness <- function(vec_individual){
+  # vec_individual <- mtx_popn_sample[1,]
+  # print("Fitness calculation started ...")
+  
+  # Create sf object 
+  sf_indiv_stations <- vec_individual %>% 
+    # Convert to tibble
+    tibble(stop_id = .) %>%
+    # Map dtop locations
+    inner_join(x = sf_stop_universe, y = ., by = "stop_id")
+  
+  # Calculate share of point demand generators served by point generators
+  data_station_point_served <- sf_indiv_stations %>% 
+    # Calculate distance to each point point generator
+    st_distance(y = sf_demand_point, by_element = FALSE) %>% 
+    # Convert to matrix
+    as.matrix() %>% 
+    # Drop units due to matrix operations being hampered when sf is loaded
+    units::drop_units() %>% 
+    # Only keep values below threshold, defined by parameter
+    (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+    # Flag the closest station for each demand point
+    apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+    # Keep only 1s
+    (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+    # Multiply each with the corresponding demand
+    sweep(MARGIN = 2, sf_demand_point$demand, `*`) %>%
+    # Sum up demand handled by each station
+    rowSums(na.rm = TRUE) %>% 
+    # Convert to tibble
+    tibble(generator_popn_served = .)
+  
+  # Calculate resident population served
+  data_station_popn_served <- sf_indiv_stations %>% 
+    # Calculate distance to all points in raster sf
+    st_distance(y = sf_popn, by_element = FALSE) %>% 
+    # Convert to matrix
+    as.matrix() %>% 
+    # Drop units due to matrix operations being hampered when sf is loaded
+    units::drop_units() %>% 
+    # Only keep values below threshold, defined by parameter
+    (function(a) ifelse(test = a >= param_sd_sat_dist, yes = NA_integer_, no = round(a))) %>%
+    # Flag the closest station for each popn point
+    apply(MARGIN = 2, FUN = rank, na.last = "keep", ties.method = "first") %>% 
+    # Keep only 1s
+    (function(a) ifelse(test = a == 1, yes = 1, no = 0)) %>% 
+    # Multiply each with the corresponding demand
+    sweep(MARGIN = 2, sf_popn$popn, `*`) %>%
+    # ROund down to integer
+    {floor(.)} %>% 
+    # Sum up demand handled by each station
+    rowSums(na.rm = TRUE) %>% 
+    # Convert to tibble
+    tibble(popn_served = .) %>% 
+    # Map Point generator fields
+    bind_cols(data_station_point_served)
+
+  # Calculate total popn served
+  sc_total_popn_served <- data_station_popn_served %>% 
+    # Add up both types of popn served for each station
+    mutate(total_popn = popn_served + generator_popn_served) %>% 
+    # Sum up to get total popn
+    as_tibble() %>% 
+    select(total_popn) %>% 
+    sum()
+  
+  sc_share_popn_served <- sc_total_popn_served/sc_total_demand
+  
+  # print("Fitness calculation complete!")
+  
+  return(sc_share_popn_served)
+}
+
+# Function for Population Initiation -------------------------
+fx_ga_init_popn <- function(obj_ga){
+  # popn_size <- 200
+  # print("Initial Population Generation started ...")
+  # Create population matrix
+  mtx_popn <- tibble(indiv_index = 1:obj_ga@popSize, 
+                          stop_index = list(c(1:param_n_stop))) %>%
+  unnest_longer(col = stop_index) %>% 
+  # Assign column names
+  group_by(indiv_index) %>%
+  mutate(stop_id = sample(x = sf_stop_universe$stop_id, size = param_n_stop, 
+                          replace = FALSE)) %>%
+  ungroup() %>%
+  # Wide form
+  pivot_wider(id_cols = indiv_index, names_from = stop_index, values_from = stop_id) %>%
+  # Convert to matrix
+  select(-indiv_index) %>%
+  as.matrix()
+  
+  # print("Initial Population generated!")
+  
+  return(mtx_popn)
+}
+
+# Function for Population Selection --------------------------
+fx_ga_select_popn <- function(obj_ga){
+  # print("Population Selection process started ...")
+  # Extract fitness value of current generation
+  ga_curr_fitness <- obj_ga@fitness
+  # Assign probabilities to each individual, proportional to the fitness value
+  curr_probs <- ga_curr_fitness/sum(ga_curr_fitness)
+  # Select indices of individuals from population, but based on their fitness
+  popn_sel <- sample(x = 1:obj_ga@popSize, size = obj_ga@popSize, 
+                     replace = TRUE, prob = curr_probs)
+  
+  # Select individuals from population\
+  mtx_popn_select <- obj_ga@population[popn_sel, , drop = FALSE]
+  vec_popn_fitness <- obj_ga@fitness[popn_sel]
+  
+  # print("Population Selection process complete!")
+  
+  return(list(population = mtx_popn_select, fitness = vec_popn_fitness))
+}
+
+# Function for CrossOver --------------------------
+fx_ga_crossover_popn <- function(obj_ga, parent_indices, p_cross_subset){
+  # mtx_popn = mtx_popn_sample
+  # parent_indices = matrix(data = c(1, 3), nrow = 2)
+  # p_cross_subset = 0.5
+  # print("Population Crossover operation started ...")
+  # Extract population matrix from GA object
+  mtx_popn <- obj_ga@population
+  
+  # Create tibble of coordinate points
+  mtx_children <- mtx_popn[parent_indices,] %>% 
+    # Convert to tibble
+    as_tibble() %>% 
+    # Add identifiers
+    mutate(parent_index = c("m", "f")) %>% 
+    # Long form
+    pivot_longer(cols = -parent_index, names_to = "index", values_to = "stop_id") %>% 
+    # Wide aqain
+    pivot_wider(id_cols = c(index), 
+                names_from = c(parent_index), values_from = stop_id) %>% 
+    # Sample points wherein to conduct swap
+    mutate(swap = sample(x = c(TRUE, FALSE), size = nrow(.), replace = TRUE, 
+                         prob = c(p_cross_subset, 1 - p_cross_subset)),
+           # Need to also verify if the swapped station already exists in the individual
+           m_check = f %notin% m,
+           f_check = m %notin% f,
+           # Recode swap
+           swap = swap & m_check & f_check,
+           z = m,
+           # Graft father on to mother
+           m = case_when(swap ~ f, TRUE ~ m),
+           # Graft mother on to father
+           f = case_when(swap ~ z, TRUE ~ f)) %>% 
+    # Remove temp vars
+    select(-c(z, swap, m_check, f_check)) %>% 
+    # Switch back to matrix form
+    pivot_longer(cols = -index, names_to = c("parent_index"), 
+                 values_to = "value") %>% 
+    # Wide form
+    pivot_wider(id_cols = parent_index, names_from = index, 
+                values_from = value) %>% 
+    select(-parent_index) %>% 
+    # Convert to matrix
+    as.matrix()
+  
+  # # Define list to return based on connectedness
+  # if(length(unique())){
+  #   # If new netwroks are connected, return the children
+  #   list_return <- list(children = mtx_children, fitness = c(NA_real_, NA_real_))
+  # } else {
+  #   # If not connected, return the parents
+  #   list_return <- list(children = mtx_popn[parent_indices, ],
+  #                       fitness = c(obj_ga@fitness[parent_indices,]))
+  # }
+  
+  # print("Population Crossover operation completed!")
+  return(list(children = mtx_children, fitness = c(NA_real_, NA_real_)))
+}
+
+# Function for Mutation ----------------------------------
+fx_ga_mutate_popn <- function(obj_ga, parent_index, p_mutation_subset){
+  # parent_index = c(2)
+  # vec_individual = mtx_popn_sample[parent_index,]
+  # p_mutation_subset = 0.5
+  # print("Population Mutation operation started ...")
+  # Extract individual from GA object
+  vec_individual <- obj_ga@population[parent_index,]
+  
+  # Get set of stop ids not already present in individual
+  vec_absent_set <- setdiff(sf_stop_universe$stop_id, vec_individual)
+  
+  # Create tibble of coordinate points
+  vec_mutant <- vec_individual %>% 
+    # Convert to tibble
+    tibble(stop_id = .) %>% 
+    # Sample points to mutate
+    mutate(mutate = sample(x = c(TRUE, FALSE), size = nrow(.), replace = TRUE, 
+                         prob = c(p_mutation_subset, 1 - p_mutation_subset)),
+           # Sample points abset points
+           swap_index = sample(x = vec_absent_set, size = nrow(.), replace = FALSE),
+           # Swap points if flag is TRUE
+           stop_id = case_when(mutate ~ swap_index, TRUE ~ stop_id)) %>% 
+    # Remove helpers
+    select(stop_id) %>% 
+    # Convert to vector
+    unlist(use.names = FALSE)
+    
+  # print("Population Mutation operation completed!")
+  return(vec_mutant)
+}
+
+# Create GA function ------------------------------------------
+# Set population size
+popSize <- 500
+# Set system parameters
+param_n_station <- 130
+param_sd_sat_dist <- 500
+
+# Create GA object
+t0 <- Sys.time()
+print(t0)
+obj_ga_bus_stop <- GA::ga(type = "real-valued", 
+                         lower = rep(x = 1, times = param_n_station),
+                         upper = rep(x = param_n_station, times = param_n_station),
+                         fitness = fx_ga_fitness, 
+                         population = fx_ga_init_popn, 
+                         selection = fx_ga_select_popn, 
+                         crossover = function(...) fx_ga_crossover_popn(..., 
+                                                                        p_cross_subset = 0.5),
+                         mutation = function(...) fx_ga_mutate_popn(..., 
+                                                                    p_mutation_subset = 0.2),
+                         popSize = popSize, 
+                         pcrossover = 0.7,
+                         pmutation = 0.03,
+                         elitism = max(1, round(popSize * 0.03)), 
+                         maxiter = 1000,
+                         run = 100, 
+                         monitor = TRUE)
+print(difftime(time1 = Sys.time(), time2 = t0))
+# Save to disk
+# write_rds(x = obj_ga_bus_stop, file = "obj_ga_bus_stop.rds")
+
+# Visualize Stop Locations ----------------------------
+obj_ga_bus_stop <- read_rds(file = "obj_ga_bus_stop.rds")
+sf_soln_bus_stop <- obj_ga_bus_stop@solution[6,] %>% 
+  # Convert to tibble
+    tibble(stop_id = .) %>%
+    # Map dtop locations
+    inner_join(x = sf_stop_universe, y = ., by = "stop_id")
+
+ggplot() +
+  geom_sf(data = sfnet_road %>% activate(edges) %>% st_as_sf(), linewidth = 1, colour = "dodgerblue") +
+  # geom_sf(data = sfnet_road %>% activate(nodes) %>% st_as_sf(), size = 2, colour = "hotpink") +
+  geom_sf(data = sf_soln_bus_stop, size = 3, colour = "red") +
+  theme_vaw_light()
+```
+
+```{r Visualize Stop Locations}
+
 
 ```
 
