@@ -2090,7 +2090,7 @@ fx_ga_fitness <- function(vec_individual){
   
   # print("Fitness calculation complete!")
   
-  return(sc_share_popn_served)
+  return(round(sc_share_popn_served, 4))
 }
 
 # Function for Population Initiation -------------------------
@@ -2240,7 +2240,7 @@ t0 <- Sys.time()
 print(t0)
 obj_ga_bus_stop <- GA::ga(type = "real-valued", 
                          lower = rep(x = 1, times = param_n_stop),
-                         upper = rep(x = param_n_stop, times = param_n_stop),
+                         upper = rep(x = max(sf_stop_universe$stop_id), times = param_n_stop),
                          fitness = fx_ga_fitness, 
                          population = fx_ga_init_popn, 
                          selection = fx_ga_select_popn, 
@@ -2257,7 +2257,7 @@ obj_ga_bus_stop <- GA::ga(type = "real-valued",
                          monitor = TRUE)
 print(difftime(time1 = Sys.time(), time2 = t0))
 # Save to disk
-# write_rds(x = obj_ga_bus_stop, file = "obj_ga_bus_stop.rds")
+write_rds(x = obj_ga_bus_stop, file = "obj_ga_bus_stop.rds")
 ```
 
 ```{r Visualize Network}
@@ -2272,14 +2272,14 @@ sf_stop_universe <- sfnet_road %>%
 # LOad solution set
 obj_ga_bus_stop <- read_rds(file = "obj_ga_bus_stop.rds")
 # Convert to sf
-sf_soln_bus_stop <- obj_ga_bus_stop@solution[6,] %>% 
+sf_soln_bus_stop <- obj_ga_bus_stop@solution[1,] %>% 
   # Convert to tibble
     tibble(stop_id = .) %>%
     # Map dtop locations
     inner_join(x = sf_stop_universe, y = ., by = "stop_id")
 
 # Load parameters
-param_n_stop <- 130
+param_n_stop <- 75
 param_sd_sat_dist <- 500
 
 # Find population served at each station ----------------
